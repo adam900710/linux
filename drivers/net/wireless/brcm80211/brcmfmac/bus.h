@@ -33,11 +33,8 @@
 
 /* The level of bus communication with the dongle */
 enum brcmf_bus_state {
-	BRCMF_BUS_UNKNOWN,	/* Not determined yet */
-	BRCMF_BUS_NOMEDIUM,	/* No medium access to dongle */
 	BRCMF_BUS_DOWN,		/* Not ready for frame transfers */
-	BRCMF_BUS_LOAD,		/* Download access only (CPU reset) */
-	BRCMF_BUS_DATA		/* Ready for frame transfers */
+	BRCMF_BUS_UP		/* Ready for frame transfers */
 };
 
 /* The level of bus communication with the dongle */
@@ -68,6 +65,8 @@ struct brcmf_bus_dcmd {
  * @rxctl: receive a control response message from dongle.
  * @gettxq: obtain a reference of bus transmit queue (optional).
  * @wowl_config: specify if dongle is configured for wowl when going to suspend
+ * @get_ramsize: obtain size of device memory.
+ * @get_memdump: obtain device memory dump in provided buffer.
  *
  * This structure provides an abstract interface towards the
  * bus specific driver. For control messages to common driver
@@ -82,6 +81,8 @@ struct brcmf_bus_ops {
 	int (*rxctl)(struct device *dev, unsigned char *msg, uint len);
 	struct pktq * (*gettxq)(struct device *dev);
 	void (*wowl_config)(struct device *dev, bool enabled);
+	size_t (*get_ramsize)(struct device *dev);
+	int (*get_memdump)(struct device *dev, void *data, size_t len);
 };
 
 
@@ -188,20 +189,21 @@ void brcmf_bus_wowl_config(struct brcmf_bus *bus, bool enabled)
 		bus->ops->wowl_config(bus->dev, enabled);
 }
 
-static inline bool brcmf_bus_ready(struct brcmf_bus *bus)
+static inline size_t brcmf_bus_get_ramsize(struct brcmf_bus *bus)
 {
-	return bus->state == BRCMF_BUS_LOAD || bus->state == BRCMF_BUS_DATA;
+	if (!bus->ops->get_ramsize)
+		return 0;
+
+	return bus->ops->get_ramsize(bus->dev);
 }
 
-static inline void brcmf_bus_change_state(struct brcmf_bus *bus,
-					  enum brcmf_bus_state new_state)
+static inline
+int brcmf_bus_get_memdump(struct brcmf_bus *bus, void *data, size_t len)
 {
-	/* NOMEDIUM is permanent */
-	if (bus->state == BRCMF_BUS_NOMEDIUM)
-		return;
+	if (!bus->ops->get_memdump)
+		return -EOPNOTSUPP;
 
-	brcmf_dbg(TRACE, "%d -> %d\n", bus->state, new_state);
-	bus->state = new_state;
+	return bus->ops->get_memdump(bus->dev, data, len);
 }
 
 /*
@@ -225,6 +227,9 @@ void brcmf_txflowblock(struct device *dev, bool state);
 
 /* Notify the bus has transferred the tx packet to firmware */
 void brcmf_txcomplete(struct device *dev, struct sk_buff *txp, bool success);
+
+/* Configure the "global" bus state used by upper layers */
+void brcmf_bus_change_state(struct brcmf_bus *bus, enum brcmf_bus_state state);
 
 int brcmf_bus_start(struct device *dev);
 s32 brcmf_iovar_data_set(struct device *dev, char *name, void *data, u32 len);

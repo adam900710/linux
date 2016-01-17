@@ -37,6 +37,7 @@
 #define SSDR		(0x10)  /* SSP Data Write/Data Read Register */
 
 #define SSTO		(0x28)  /* SSP Time Out Register */
+#define DDS_RATE	(0x28)  /* SSP DDS Clock Rate Register (Intel Quark) */
 #define SSPSP		(0x2C)  /* SSP Programmable Serial Protocol */
 #define SSTSA		(0x30)  /* SSP Tx Timeslot Active */
 #define SSRSA		(0x34)  /* SSP Rx Timeslot Active */
@@ -193,8 +194,11 @@ enum pxa_ssp_type {
 	PXA168_SSP,
 	PXA910_SSP,
 	CE4100_SSP,
-	LPSS_SSP,
 	QUARK_X1000_SSP,
+	LPSS_LPT_SSP, /* Keep LPSS types sorted with lpss_platforms[] */
+	LPSS_BYT_SSP,
+	LPSS_SPT_SSP,
+	LPSS_BXT_SSP,
 };
 
 struct ssp_device {

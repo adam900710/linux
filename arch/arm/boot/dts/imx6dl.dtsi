@@ -28,7 +28,7 @@
 			next-level-cache = <&L2>;
 			operating-points = <
 				/* kHz    uV */
-				996000  1275000
+				996000  1250000
 				792000  1175000
 				396000  1075000
 			>;
@@ -104,6 +104,10 @@
 		compatible = "fsl,imx-display-subsystem";
 		ports = <&ipu1_di0>, <&ipu1_di1>;
 	};
+};
+
+&gpt {
+	compatible = "fsl,imx6dl-gpt", "fsl,imx6q-gpt";
 };
 
 &hdmi {

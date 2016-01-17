@@ -72,7 +72,6 @@ void musb_host_finish_resume(struct work_struct *work)
 	musb->xceiv->otg->state = OTG_STATE_A_HOST;
 
 	spin_unlock_irqrestore(&musb->lock, flags);
-	musb_host_resume_root_hub(musb);
 }
 
 void musb_port_suspend(struct musb *musb, bool do_suspend)
@@ -137,7 +136,7 @@ void musb_port_suspend(struct musb *musb, bool do_suspend)
 		/* later, GetPortStatus will stop RESUME signaling */
 		musb->port1_status |= MUSB_PORT_STAT_RESUME;
 		schedule_delayed_work(&musb->finish_resume_work,
-				      msecs_to_jiffies(20));
+				      msecs_to_jiffies(USB_RESUME_TIMEOUT));
 	}
 }
 
@@ -196,8 +195,10 @@ void musb_port_reset(struct musb *musb, bool do_reset)
 				      msecs_to_jiffies(50));
 	} else {
 		dev_dbg(musb->controller, "root port reset stopped\n");
+		musb_platform_pre_root_reset_end(musb);
 		musb_writeb(mbase, MUSB_POWER,
 				power & ~MUSB_POWER_RESET);
+		musb_platform_post_root_reset_end(musb);
 
 		power = musb_readb(mbase, MUSB_POWER);
 		if (power & MUSB_POWER_HSMODE) {
@@ -274,9 +275,7 @@ static int musb_has_gadget(struct musb *musb)
 #ifdef CONFIG_USB_MUSB_HOST
 	return 1;
 #else
-	if (musb->port_mode == MUSB_PORT_MODE_HOST)
-		return 1;
-	return musb->g.dev.driver != NULL;
+	return musb->port_mode == MUSB_PORT_MODE_HOST;
 #endif
 }
 
@@ -346,12 +345,12 @@ int musb_hub_control(
 		struct usb_hub_descriptor *desc = (void *)buf;
 
 		desc->bDescLength = 9;
-		desc->bDescriptorType = 0x29;
+		desc->bDescriptorType = USB_DT_HUB;
 		desc->bNbrPorts = 1;
 		desc->wHubCharacteristics = cpu_to_le16(
-				  0x0001	/* per-port power switching */
-				| 0x0010	/* no overcurrent reporting */
-				);
+			HUB_CHAR_INDV_PORT_LPSM /* per-port power switching */
+			| HUB_CHAR_NO_OCPM	/* no overcurrent reporting */
+			);
 		desc->bPwrOn2PwrGood = 5;	/* msec/2 */
 		desc->bHubContrCurrent = 0;
 

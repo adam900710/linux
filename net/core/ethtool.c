@@ -106,6 +106,13 @@ rss_hash_func_strings[ETH_RSS_HASH_FUNCS_COUNT][ETH_GSTRING_LEN] = {
 	[ETH_RSS_HASH_XOR_BIT] =	"xor",
 };
 
+static const char
+tunable_strings[__ETHTOOL_TUNABLE_COUNT][ETH_GSTRING_LEN] = {
+	[ETHTOOL_ID_UNSPEC]     = "Unspec",
+	[ETHTOOL_RX_COPYBREAK]	= "rx-copybreak",
+	[ETHTOOL_TX_COPYBREAK]	= "tx-copybreak",
+};
+
 static int ethtool_get_features(struct net_device *dev, void __user *useraddr)
 {
 	struct ethtool_gfeatures cmd = {
@@ -194,6 +201,9 @@ static int __ethtool_get_sset_count(struct net_device *dev, int sset)
 	if (sset == ETH_SS_RSS_HASH_FUNCS)
 		return ARRAY_SIZE(rss_hash_func_strings);
 
+	if (sset == ETH_SS_TUNABLES)
+		return ARRAY_SIZE(tunable_strings);
+
 	if (ops->get_sset_count && ops->get_strings)
 		return ops->get_sset_count(dev, sset);
 	else
@@ -211,6 +221,8 @@ static void __ethtool_get_strings(struct net_device *dev,
 	else if (stringset == ETH_SS_RSS_HASH_FUNCS)
 		memcpy(data, rss_hash_func_strings,
 		       sizeof(rss_hash_func_strings));
+	else if (stringset == ETH_SS_TUNABLES)
+		memcpy(data, tunable_strings, sizeof(tunable_strings));
 	else
 		/* ops->get_strings is valid because checked earlier */
 		ops->get_strings(dev, stringset, data);
@@ -789,7 +801,7 @@ static noinline_for_stack int ethtool_set_rxfh(struct net_device *dev,
 	if (ops->get_rxfh_indir_size)
 		dev_indir_size = ops->get_rxfh_indir_size(dev);
 	if (ops->get_rxfh_key_size)
-		dev_key_size = dev->ethtool_ops->get_rxfh_key_size(dev);
+		dev_key_size = ops->get_rxfh_key_size(dev);
 
 	if (copy_from_user(&rxfh, useraddr, sizeof(rxfh)))
 		return -EFAULT;
@@ -1272,7 +1284,7 @@ static int ethtool_get_strings(struct net_device *dev, void __user *useraddr)
 
 	gstrings.len = ret;
 
-	data = kmalloc(gstrings.len * ETH_GSTRING_LEN, GFP_USER);
+	data = kcalloc(gstrings.len, ETH_GSTRING_LEN, GFP_USER);
 	if (!data)
 		return -ENOMEM;
 
@@ -1597,20 +1609,31 @@ static int ethtool_get_ts_info(struct net_device *dev, void __user *useraddr)
 	return err;
 }
 
+static int __ethtool_get_module_info(struct net_device *dev,
+				     struct ethtool_modinfo *modinfo)
+{
+	const struct ethtool_ops *ops = dev->ethtool_ops;
+	struct phy_device *phydev = dev->phydev;
+
+	if (phydev && phydev->drv && phydev->drv->module_info)
+		return phydev->drv->module_info(phydev, modinfo);
+
+	if (ops->get_module_info)
+		return ops->get_module_info(dev, modinfo);
+
+	return -EOPNOTSUPP;
+}
+
 static int ethtool_get_module_info(struct net_device *dev,
 				   void __user *useraddr)
 {
 	int ret;
 	struct ethtool_modinfo modinfo;
-	const struct ethtool_ops *ops = dev->ethtool_ops;
-
-	if (!ops->get_module_info)
-		return -EOPNOTSUPP;
 
 	if (copy_from_user(&modinfo, useraddr, sizeof(modinfo)))
 		return -EFAULT;
 
-	ret = ops->get_module_info(dev, &modinfo);
+	ret = __ethtool_get_module_info(dev, &modinfo);
 	if (ret)
 		return ret;
 
@@ -1620,21 +1643,33 @@ static int ethtool_get_module_info(struct net_device *dev,
 	return 0;
 }
 
+static int __ethtool_get_module_eeprom(struct net_device *dev,
+				       struct ethtool_eeprom *ee, u8 *data)
+{
+	const struct ethtool_ops *ops = dev->ethtool_ops;
+	struct phy_device *phydev = dev->phydev;
+
+	if (phydev && phydev->drv && phydev->drv->module_eeprom)
+		return phydev->drv->module_eeprom(phydev, ee, data);
+
+	if (ops->get_module_eeprom)
+		return ops->get_module_eeprom(dev, ee, data);
+
+	return -EOPNOTSUPP;
+}
+
 static int ethtool_get_module_eeprom(struct net_device *dev,
 				     void __user *useraddr)
 {
 	int ret;
 	struct ethtool_modinfo modinfo;
-	const struct ethtool_ops *ops = dev->ethtool_ops;
 
-	if (!ops->get_module_info || !ops->get_module_eeprom)
-		return -EOPNOTSUPP;
-
-	ret = ops->get_module_info(dev, &modinfo);
+	ret = __ethtool_get_module_info(dev, &modinfo);
 	if (ret)
 		return ret;
 
-	return ethtool_get_any_eeprom(dev, useraddr, ops->get_module_eeprom,
+	return ethtool_get_any_eeprom(dev, useraddr,
+				      __ethtool_get_module_eeprom,
 				      modinfo.eeprom_len);
 }
 

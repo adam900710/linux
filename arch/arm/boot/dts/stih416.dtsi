@@ -10,9 +10,10 @@
 #include "stih416-clock.dtsi"
 #include "stih416-pinctrl.dtsi"
 
-#include <dt-bindings/phy/phy-miphy365x.h>
+#include <dt-bindings/phy/phy.h>
 #include <dt-bindings/interrupt-controller/arm-gic.h>
-#include <dt-bindings/reset-controller/stih416-resets.h>
+#include <dt-bindings/reset/stih416-resets.h>
+#include <dt-bindings/interrupt-controller/irq-st.h>
 / {
 	L2: cache-controller {
 		compatible = "arm,pl310-cache";
@@ -23,12 +24,24 @@
 		cache-level = <2>;
 	};
 
+	arm-pmu {
+		compatible = "arm,cortex-a9-pmu";
+		interrupt-parent = <&intc>;
+		interrupts = <GIC_PPI 15 IRQ_TYPE_LEVEL_HIGH>;
+	};
+
 	soc {
 		#address-cells = <1>;
 		#size-cells = <1>;
 		interrupt-parent = <&intc>;
 		ranges;
 		compatible	= "simple-bus";
+
+		restart {
+			compatible = "st,stih416-restart";
+			st,syscfg = <&syscfg_sbc>;
+			status = "okay";
+		};
 
 		powerdown: powerdown-controller {
 			#reset-cells = <1>;
@@ -86,6 +99,15 @@
 			reg		= <0xfe4b5100 0x8>;
 		};
 
+		irq-syscfg {
+			compatible    = "st,stih416-irq-syscfg";
+			st,syscfg     = <&syscfg_cpu>;
+			st,irq-device = <ST_IRQ_SYSCFG_PMU_0>,
+					<ST_IRQ_SYSCFG_PMU_1>;
+			st,fiq-device = <ST_IRQ_SYSCFG_DISABLED>,
+					<ST_IRQ_SYSCFG_DISABLED>;
+		};
+
 		serial2: serial@fed32000{
 			compatible	= "st,asc";
 			status 		= "disabled";
@@ -104,7 +126,7 @@
 			interrupts	= <0 210 0>;
 			pinctrl-names 	= "default";
 			pinctrl-0 	= <&pinctrl_sbc_serial1>;
-			clocks          = <&clk_sysin>;
+			clocks		= <&clk_sysin>;
 		};
 
 		i2c@fed40000 {
@@ -163,8 +185,8 @@
 			device_type 	= "network";
 			compatible	= "st,stih416-dwmac", "snps,dwmac", "snps,dwmac-3.710";
 			status 		= "disabled";
-			reg 		= <0xfe810000 0x8000>, <0x8bc 0x4>;
-			reg-names	= "stmmaceth", "sti-ethconf";
+			reg		= <0xfe810000 0x8000>;
+			reg-names	= "stmmaceth";
 
 			interrupts = <0 133 0>, <0 134 0>, <0 135 0>;
 			interrupt-names = "macirq", "eth_wake_irq", "eth_lpi";
@@ -172,7 +194,7 @@
 			snps,pbl 	= <32>;
 			snps,mixed-burst;
 
-			st,syscon		= <&syscfg_rear>;
+			st,syscon		= <&syscfg_rear 0x8bc>;
 			resets			= <&softreset STIH416_ETH0_SOFTRESET>;
 			reset-names		= "stmmaceth";
 			pinctrl-names 	= "default";
@@ -185,15 +207,15 @@
 			device_type = "network";
 			compatible		= "st,stih416-dwmac", "snps,dwmac", "snps,dwmac-3.710";
 			status 		= "disabled";
-			reg		= <0xfef08000 0x8000>, <0x7f0 0x4>;
-			reg-names	= "stmmaceth", "sti-ethconf";
+			reg		= <0xfef08000 0x8000>;
+			reg-names	= "stmmaceth";
 			interrupts = <0 136 0>, <0 137 0>, <0 138 0>;
 			interrupt-names = "macirq", "eth_wake_irq", "eth_lpi";
 
 			snps,pbl	= <32>;
 			snps,mixed-burst;
 
-			st,syscon	= <&syscfg_sbc>;
+			st,syscon	= <&syscfg_sbc 0x7f0>;
 
 			resets		= <&softreset STIH416_ETH1_SOFTRESET>;
 			reset-names	= "stmmaceth";
@@ -283,21 +305,21 @@
 
 		miphy365x_phy: phy@fe382000 {
 			compatible      = "st,miphy365x-phy";
-			st,syscfg  	= <&syscfg_rear>;
+			st,syscfg	= <&syscfg_rear 0x824 0x828>;
 			#address-cells	= <1>;
 			#size-cells	= <1>;
 			ranges;
 
 			phy_port0: port@fe382000 {
 				#phy-cells = <1>;
-				reg = <0xfe382000 0x100>, <0xfe394000 0x100>, <0x824 0x4>;
-				reg-names = "sata", "pcie", "syscfg";
+				reg = <0xfe382000 0x100>, <0xfe394000 0x100>;
+				reg-names = "sata", "pcie";
 			};
 
 			phy_port1: port@fe38a000 {
 				#phy-cells = <1>;
-				reg = <0xfe38a000 0x100>, <0xfe804000 0x100>, <0x828 0x4>;
-				reg-names = "sata", "pcie", "syscfg";
+				reg = <0xfe38a000 0x100>, <0xfe804000 0x100>;
+				reg-names = "sata", "pcie";
 			};
 		};
 
@@ -306,7 +328,7 @@
 			reg             = <0xfe380000 0x1000>;
 			interrupts      = <GIC_SPI 157 IRQ_TYPE_NONE>;
 			interrupt-names = "hostc";
-			phys	        = <&phy_port0 MIPHY_TYPE_SATA>;
+			phys	        = <&phy_port0 PHY_TYPE_SATA>;
 			phy-names       = "sata-phy";
 			resets	        = <&powerdown STIH416_SATA0_POWERDOWN>,
 					  <&softreset STIH416_SATA0_SOFTRESET>;
@@ -444,6 +466,48 @@
 			resets = <&powerdown STIH416_USB3_POWERDOWN>,
 				 <&softreset STIH416_USB3_SOFTRESET>;
 			reset-names = "power", "softreset";
+		};
+
+		/* SAS PWM Module */
+		pwm0: pwm@fed10000 {
+			compatible	= "st,sti-pwm";
+			status		= "disabled";
+			#pwm-cells	= <2>;
+			reg		= <0xfed10000 0x68>;
+
+			pinctrl-names	= "default";
+			pinctrl-0 = 	<&pinctrl_pwm0_chan0_default
+					&pinctrl_pwm0_chan1_default
+					&pinctrl_pwm0_chan2_default
+					&pinctrl_pwm0_chan3_default>;
+
+			clock-names	= "pwm";
+			clocks		= <&clk_sysin>;
+			st,pwm-num-chan = <4>;
+		};
+
+		/* SBC PWM Module */
+		pwm1: pwm@fe510000 {
+			compatible	= "st,sti-pwm";
+			status		= "disabled";
+			#pwm-cells	= <2>;
+			reg		= <0xfe510000 0x68>;
+
+			pinctrl-names	= "default";
+			pinctrl-0	= <&pinctrl_pwm1_chan0_default
+					/*
+					 * Shared with SBC_OBS_NOTRST.  Don't
+					 * enable unless you really know what
+					 * you're doing.
+					 *
+					 * &pinctrl_pwm1_chan1_default
+					 */
+					&pinctrl_pwm1_chan2_default
+					&pinctrl_pwm1_chan3_default>;
+
+			clock-names	= "pwm";
+			clocks		= <&clk_sysin>;
+			st,pwm-num-chan = <3>;
 		};
 	};
 };

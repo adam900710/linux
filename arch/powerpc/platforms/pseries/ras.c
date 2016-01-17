@@ -89,6 +89,8 @@ static void handle_system_shutdown(char event_modifier)
 	case EPOW_SHUTDOWN_ON_UPS:
 		pr_emerg("Loss of power reported by firmware, system is "
 			"running on UPS/battery");
+		pr_emerg("Check RTAS error log for details");
+		orderly_poweroff(true);
 		break;
 
 	case EPOW_SHUTDOWN_LOSS_OF_CRITICAL_FUNCTIONS:
@@ -187,7 +189,8 @@ static irqreturn_t ras_epow_interrupt(int irq, void *dev_id)
 	int state;
 	int critical;
 
-	status = rtas_get_sensor(EPOW_SENSOR_TOKEN, EPOW_SENSOR_INDEX, &state);
+	status = rtas_get_sensor_fast(EPOW_SENSOR_TOKEN, EPOW_SENSOR_INDEX,
+				      &state);
 
 	if (state > 3)
 		critical = 1;		/* Time Critical */

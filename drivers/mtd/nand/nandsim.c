@@ -245,7 +245,6 @@ MODULE_PARM_DESC(bch,		 "Enable BCH ecc and set how many bits should "
 #define STATE_DATAOUT          0x00001000 /* waiting for page data output */
 #define STATE_DATAOUT_ID       0x00002000 /* waiting for ID bytes output */
 #define STATE_DATAOUT_STATUS   0x00003000 /* waiting for status output */
-#define STATE_DATAOUT_STATUS_M 0x00004000 /* waiting for multi-plane status output */
 #define STATE_DATAOUT_MASK     0x00007000 /* data output states mask */
 
 /* Previous operation is done, ready to accept new requests */
@@ -269,7 +268,6 @@ MODULE_PARM_DESC(bch,		 "Enable BCH ecc and set how many bits should "
 #define OPT_ANY          0xFFFFFFFF /* any chip supports this operation */
 #define OPT_PAGE512      0x00000002 /* 512-byte  page chips */
 #define OPT_PAGE2048     0x00000008 /* 2048-byte page chips */
-#define OPT_SMARTMEDIA   0x00000010 /* SmartMedia technology chips */
 #define OPT_PAGE512_8BIT 0x00000040 /* 512-byte page chips with 8-bit bus width */
 #define OPT_PAGE4096     0x00000080 /* 4096-byte page chips */
 #define OPT_LARGEPAGE    (OPT_PAGE2048 | OPT_PAGE4096) /* 2048 & 4096-byte page chips */
@@ -731,8 +729,7 @@ static int init_nandsim(struct mtd_info *mtd)
 	/* Fill the partition_info structure */
 	if (parts_num > ARRAY_SIZE(ns->partitions)) {
 		NS_ERR("too many partitions.\n");
-		ret = -EINVAL;
-		goto error;
+		return -EINVAL;
 	}
 	remains = ns->geom.totsz;
 	next_offset = 0;
@@ -741,10 +738,13 @@ static int init_nandsim(struct mtd_info *mtd)
 
 		if (!part_sz || part_sz > remains) {
 			NS_ERR("bad partition size.\n");
-			ret = -EINVAL;
-			goto error;
+			return -EINVAL;
 		}
 		ns->partitions[i].name   = get_partition_name(i);
+		if (!ns->partitions[i].name) {
+			NS_ERR("unable to allocate memory.\n");
+			return -ENOMEM;
+		}
 		ns->partitions[i].offset = next_offset;
 		ns->partitions[i].size   = part_sz;
 		next_offset += ns->partitions[i].size;
@@ -754,10 +754,13 @@ static int init_nandsim(struct mtd_info *mtd)
 	if (remains) {
 		if (parts_num + 1 > ARRAY_SIZE(ns->partitions)) {
 			NS_ERR("too many partitions.\n");
-			ret = -EINVAL;
-			goto error;
+			return -EINVAL;
 		}
 		ns->partitions[i].name   = get_partition_name(i);
+		if (!ns->partitions[i].name) {
+			NS_ERR("unable to allocate memory.\n");
+			return -ENOMEM;
+		}
 		ns->partitions[i].offset = next_offset;
 		ns->partitions[i].size   = remains;
 		ns->nbparts += 1;
@@ -784,24 +787,18 @@ static int init_nandsim(struct mtd_info *mtd)
 	printk("options: %#x\n",                ns->options);
 
 	if ((ret = alloc_device(ns)) != 0)
-		goto error;
+		return ret;
 
 	/* Allocate / initialize the internal buffer */
 	ns->buf.byte = kmalloc(ns->geom.pgszoob, GFP_KERNEL);
 	if (!ns->buf.byte) {
 		NS_ERR("init_nandsim: unable to allocate %u bytes for the internal buffer\n",
 			ns->geom.pgszoob);
-		ret = -ENOMEM;
-		goto error;
+		return -ENOMEM;
 	}
 	memset(ns->buf.byte, 0xFF, ns->geom.pgszoob);
 
 	return 0;
-
-error:
-	free_device(ns);
-
-	return ret;
 }
 
 /*
@@ -1096,8 +1093,6 @@ static char *get_state_name(uint32_t state)
 			return "STATE_DATAOUT_ID";
 		case STATE_DATAOUT_STATUS:
 			return "STATE_DATAOUT_STATUS";
-		case STATE_DATAOUT_STATUS_M:
-			return "STATE_DATAOUT_STATUS_M";
 		case STATE_READY:
 			return "STATE_READY";
 		case STATE_UNKNOWN:
@@ -1865,7 +1860,6 @@ static void switch_state(struct nandsim *ns)
 				break;
 
 			case STATE_DATAOUT_STATUS:
-			case STATE_DATAOUT_STATUS_M:
 				ns->regs.count = ns->regs.num = 0;
 				break;
 
@@ -2005,7 +1999,6 @@ static void ns_nand_write_byte(struct mtd_info *mtd, u_char byte)
 		}
 
 		if (NS_STATE(ns->state) == STATE_DATAOUT_STATUS
-			|| NS_STATE(ns->state) == STATE_DATAOUT_STATUS_M
 			|| NS_STATE(ns->state) == STATE_DATAOUT) {
 			int row = ns->regs.row;
 
@@ -2343,6 +2336,7 @@ static int __init ns_init_module(void)
 		}
 		chip->ecc.mode = NAND_ECC_SOFT_BCH;
 		chip->ecc.size = 512;
+		chip->ecc.strength = bch;
 		chip->ecc.bytes = eccbytes;
 		NS_INFO("using %u-bit/%u bytes BCH ECC\n", bch, chip->ecc.size);
 	}

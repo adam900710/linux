@@ -1,7 +1,7 @@
 /*
  * sched_clock for unstable cpu clocks
  *
- *  Copyright (C) 2008 Red Hat, Inc., Peter Zijlstra <pzijlstr@redhat.com>
+ *  Copyright (C) 2008 Red Hat, Inc., Peter Zijlstra
  *
  *  Updates and enhancements:
  *    Copyright (C) 2008 Red Hat, Inc. Steven Rostedt <srostedt@redhat.com>
@@ -420,3 +420,16 @@ u64 local_clock(void)
 
 EXPORT_SYMBOL_GPL(cpu_clock);
 EXPORT_SYMBOL_GPL(local_clock);
+
+/*
+ * Running clock - returns the time that has elapsed while a guest has been
+ * running.
+ * On a guest this value should be local_clock minus the time the guest was
+ * suspended by the hypervisor (for any reason).
+ * On bare metal this function should return the same as local_clock.
+ * Architectures and sub-architectures can override this.
+ */
+u64 __weak running_clock(void)
+{
+	return local_clock();
+}

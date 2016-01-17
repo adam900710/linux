@@ -2,8 +2,10 @@
 #include <linux/export.h>
 #include <linux/of.h>
 #include <linux/of_address.h>
+#include <linux/of_device.h>
 #include <linux/of_pci.h>
 #include <linux/slab.h>
+#include <asm-generic/pci-bridge.h>
 
 static inline int __of_pci_pci_compare(struct device_node *node,
 				       unsigned int data)
@@ -116,6 +118,31 @@ int of_get_pci_domain_nr(struct device_node *node)
 }
 EXPORT_SYMBOL_GPL(of_get_pci_domain_nr);
 
+/**
+ * of_pci_check_probe_only - Setup probe only mode if linux,pci-probe-only
+ *                           is present and valid
+ */
+void of_pci_check_probe_only(void)
+{
+	u32 val;
+	int ret;
+
+	ret = of_property_read_u32(of_chosen, "linux,pci-probe-only", &val);
+	if (ret) {
+		if (ret == -ENODATA || ret == -EOVERFLOW)
+			pr_warn("linux,pci-probe-only without valid value, ignoring\n");
+		return;
+	}
+
+	if (val)
+		pci_add_flags(PCI_PROBE_ONLY);
+	else
+		pci_clear_flags(PCI_PROBE_ONLY);
+
+	pr_info("PCI: PROBE_ONLY %sabled\n", val ? "en" : "dis");
+}
+EXPORT_SYMBOL_GPL(of_pci_check_probe_only);
+
 #if defined(CONFIG_OF_ADDRESS)
 /**
  * of_pci_get_host_bridge_resources - Parse PCI host bridge resources from DT
@@ -140,6 +167,7 @@ int of_pci_get_host_bridge_resources(struct device_node *dev,
 			unsigned char busno, unsigned char bus_max,
 			struct list_head *resources, resource_size_t *io_base)
 {
+	struct resource_entry *window;
 	struct resource *res;
 	struct resource *bus_range;
 	struct of_pci_range range;
@@ -201,8 +229,10 @@ int of_pci_get_host_bridge_resources(struct device_node *dev,
 		}
 
 		err = of_pci_range_to_resource(&range, dev, res);
-		if (err)
-			goto conversion_failed;
+		if (err) {
+			kfree(res);
+			continue;
+		}
 
 		if (resource_type(res) == IORESOURCE_IO) {
 			if (!io_base) {
@@ -225,6 +255,8 @@ int of_pci_get_host_bridge_resources(struct device_node *dev,
 conversion_failed:
 	kfree(res);
 parse_failed:
+	resource_list_for_each_entry(window, resources)
+		kfree(window->res);
 	pci_free_resource_list(resources);
 	return err;
 }

@@ -58,20 +58,11 @@
 		.info_mask_shared_by_type = BIT(IIO_CHAN_INFO_SAMP_FREQ), \
 	}
 
-/* LSB is in nV to eliminate floating point */
-static const u32 rates_to_lsb[] = {1000000, 250000, 62500, 15625};
-
-/*
- *  scales calculated as:
- *  rates_to_lsb[sample_rate] / (1 << pga);
- *  pga is 1 for 0, 2
- */
-
 static const int mcp3422_scales[4][4] = {
-	{ 1000000, 250000, 62500, 15625 },
-	{ 500000 , 125000, 31250, 7812 },
-	{ 250000 , 62500 , 15625, 3906 },
-	{ 125000 , 31250 , 7812 , 1953 } };
+	{ 1000000, 500000, 250000, 125000 },
+	{ 250000 , 125000, 62500 , 31250  },
+	{ 62500  , 31250 , 15625 , 7812   },
+	{ 15625  , 7812  , 3906  , 1953   } };
 
 /* Constant msleep times for data acquisitions */
 static const int mcp3422_read_times[4] = {
@@ -413,7 +404,6 @@ MODULE_DEVICE_TABLE(of, mcp3422_of_match);
 static struct i2c_driver mcp3422_driver = {
 	.driver = {
 		.name = "mcp3422",
-		.owner = THIS_MODULE,
 		.of_match_table = of_match_ptr(mcp3422_of_match),
 	},
 	.probe = mcp3422_probe,

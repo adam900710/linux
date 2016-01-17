@@ -20,6 +20,7 @@
 #include "msm_gem.h"
 
 struct msm_commit {
+	struct drm_device *dev;
 	struct drm_atomic_state *state;
 	uint32_t fence;
 	struct msm_fence_cb fence_cb;
@@ -58,14 +59,16 @@ static void end_atomic(struct msm_drm_private *priv, uint32_t crtc_mask)
 	spin_unlock(&priv->pending_crtcs_event.lock);
 }
 
-static struct msm_commit *new_commit(struct drm_atomic_state *state)
+static struct msm_commit *commit_init(struct drm_atomic_state *state)
 {
 	struct msm_commit *c = kzalloc(sizeof(*c), GFP_KERNEL);
 
 	if (!c)
 		return NULL;
 
+	c->dev = state->dev;
 	c->state = state;
+
 	/* TODO we might need a way to indicate to run the cb on a
 	 * different wq so wait_for_vblanks() doesn't block retiring
 	 * bo's..
@@ -75,6 +78,39 @@ static struct msm_commit *new_commit(struct drm_atomic_state *state)
 	return c;
 }
 
+static void commit_destroy(struct msm_commit *c)
+{
+	end_atomic(c->dev->dev_private, c->crtc_mask);
+	kfree(c);
+}
+
+static void msm_atomic_wait_for_commit_done(struct drm_device *dev,
+		struct drm_atomic_state *old_state)
+{
+	struct drm_crtc *crtc;
+	struct msm_drm_private *priv = old_state->dev->dev_private;
+	struct msm_kms *kms = priv->kms;
+	int ncrtcs = old_state->dev->mode_config.num_crtc;
+	int i;
+
+	for (i = 0; i < ncrtcs; i++) {
+		crtc = old_state->crtcs[i];
+
+		if (!crtc)
+			continue;
+
+		if (!crtc->state->enable)
+			continue;
+
+		/* Legacy cursor ioctls are completely unsynced, and userspace
+		 * relies on that (by doing tons of cursor updates). */
+		if (old_state->legacy_cursor_update)
+			continue;
+
+		kms->funcs->wait_for_crtc_commit_done(kms, crtc);
+	}
+}
+
 /* The (potentially) asynchronous part of the commit.  At this point
  * nothing can fail short of armageddon.
  */
@@ -82,12 +118,16 @@ static void complete_commit(struct msm_commit *c)
 {
 	struct drm_atomic_state *state = c->state;
 	struct drm_device *dev = state->dev;
+	struct msm_drm_private *priv = dev->dev_private;
+	struct msm_kms *kms = priv->kms;
 
-	drm_atomic_helper_commit_pre_planes(dev, state);
+	kms->funcs->prepare_commit(kms, state);
 
-	drm_atomic_helper_commit_planes(dev, state);
+	drm_atomic_helper_commit_modeset_disables(dev, state);
 
-	drm_atomic_helper_commit_post_planes(dev, state);
+	drm_atomic_helper_commit_planes(dev, state, false);
+
+	drm_atomic_helper_commit_modeset_enables(dev, state);
 
 	/* NOTE: _wait_for_vblanks() only waits for vblank on
 	 * enabled CRTCs.  So we end up faulting when disabling
@@ -102,15 +142,15 @@ static void complete_commit(struct msm_commit *c)
 	 * not be critical path)
 	 */
 
-	drm_atomic_helper_wait_for_vblanks(dev, state);
+	msm_atomic_wait_for_commit_done(dev, state);
 
 	drm_atomic_helper_cleanup_planes(dev, state);
 
+	kms->funcs->complete_commit(kms, state);
+
 	drm_atomic_state_free(state);
 
-	end_atomic(dev->dev_private, c->crtc_mask);
-
-	kfree(c);
+	commit_destroy(c);
 }
 
 static void fence_cb(struct msm_fence_cb *cb)
@@ -126,6 +166,25 @@ static void add_fb(struct msm_commit *c, struct drm_framebuffer *fb)
 	c->fence = max(c->fence, msm_gem_fence(to_msm_bo(obj), MSM_PREP_READ));
 }
 
+int msm_atomic_check(struct drm_device *dev,
+		     struct drm_atomic_state *state)
+{
+	int ret;
+
+	/*
+	 * msm ->atomic_check can update ->mode_changed for pixel format
+	 * changes, hence must be run before we check the modeset changes.
+	 */
+	ret = drm_atomic_helper_check_planes(dev, state);
+	if (ret)
+		return ret;
+
+	ret = drm_atomic_helper_check_modeset(dev, state);
+	if (ret)
+		return ret;
+
+	return ret;
+}
 
 /**
  * drm_atomic_helper_commit - commit validated state object
@@ -145,6 +204,7 @@ int msm_atomic_commit(struct drm_device *dev,
 {
 	int nplanes = dev->mode_config.num_total_plane;
 	int ncrtcs = dev->mode_config.num_crtc;
+	ktime_t timeout;
 	struct msm_commit *c;
 	int i, ret;
 
@@ -152,9 +212,11 @@ int msm_atomic_commit(struct drm_device *dev,
 	if (ret)
 		return ret;
 
-	c = new_commit(state);
-	if (!c)
-		return -ENOMEM;
+	c = commit_init(state);
+	if (!c) {
+		ret = -ENOMEM;
+		goto error;
+	}
 
 	/*
 	 * Figure out what crtcs we have:
@@ -185,8 +247,10 @@ int msm_atomic_commit(struct drm_device *dev,
 	 * mark our set of crtc's as busy:
 	 */
 	ret = start_atomic(dev->dev_private, c->crtc_mask);
-	if (ret)
-		return ret;
+	if (ret) {
+		kfree(c);
+		goto error;
+	}
 
 	/*
 	 * This is the point of no return - everything below never fails except
@@ -217,14 +281,16 @@ int msm_atomic_commit(struct drm_device *dev,
 		return 0;
 	}
 
-	ret = msm_wait_fence_interruptable(dev, c->fence, NULL);
-	if (ret) {
-		WARN_ON(ret);  // TODO unswap state back?  or??
-		kfree(c);
-		return ret;
-	}
+	timeout = ktime_add_ms(ktime_get(), 1000);
+
+	/* uninterruptible wait */
+	msm_wait_fence(dev, c->fence, &timeout, false);
 
 	complete_commit(c);
 
 	return 0;
+
+error:
+	drm_atomic_helper_cleanup_planes(dev, state);
+	return ret;
 }

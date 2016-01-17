@@ -16,12 +16,19 @@
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/pci.h>
+#include <linux/interrupt.h>
 #include <linux/platform_device.h>
 #include <linux/acpi.h>
+#include <linux/thermal.h>
+#include "int340x_thermal_zone.h"
+#include "../intel_soc_dts_iosf.h"
 
 /* Broadwell-U/HSB thermal reporting device */
 #define PCI_DEVICE_ID_PROC_BDW_THERMAL	0x1603
 #define PCI_DEVICE_ID_PROC_HSB_THERMAL	0x0A03
+
+/* Skylake thermal reporting device */
+#define PCI_DEVICE_ID_PROC_SKL_THERMAL	0x1903
 
 /* Braswell thermal reporting device */
 #define PCI_DEVICE_ID_PROC_BSW_THERMAL	0x22DC
@@ -39,6 +46,8 @@ struct proc_thermal_device {
 	struct device *dev;
 	struct acpi_device *adev;
 	struct power_config power_limits[2];
+	struct int34x_thermal_zone *int340x_zone;
+	struct intel_soc_dts_sensors *soc_dts;
 };
 
 enum proc_thermal_emum_mode_type {
@@ -117,6 +126,72 @@ static struct attribute_group power_limit_attribute_group = {
 	.name = "power_limits"
 };
 
+static int stored_tjmax; /* since it is fixed, we can have local storage */
+
+static int get_tjmax(void)
+{
+	u32 eax, edx;
+	u32 val;
+	int err;
+
+	err = rdmsr_safe(MSR_IA32_TEMPERATURE_TARGET, &eax, &edx);
+	if (err)
+		return err;
+
+	val = (eax >> 16) & 0xff;
+	if (val)
+		return val;
+
+	return -EINVAL;
+}
+
+static int read_temp_msr(int *temp)
+{
+	int cpu;
+	u32 eax, edx;
+	int err;
+	unsigned long curr_temp_off = 0;
+
+	*temp = 0;
+
+	for_each_online_cpu(cpu) {
+		err = rdmsr_safe_on_cpu(cpu, MSR_IA32_THERM_STATUS, &eax,
+					&edx);
+		if (err)
+			goto err_ret;
+		else {
+			if (eax & 0x80000000) {
+				curr_temp_off = (eax >> 16) & 0x7f;
+				if (!*temp || curr_temp_off < *temp)
+					*temp = curr_temp_off;
+			} else {
+				err = -EINVAL;
+				goto err_ret;
+			}
+		}
+	}
+
+	return 0;
+err_ret:
+	return err;
+}
+
+static int proc_thermal_get_zone_temp(struct thermal_zone_device *zone,
+					 int *temp)
+{
+	int ret;
+
+	ret = read_temp_msr(temp);
+	if (!ret)
+		*temp = (stored_tjmax - *temp) * 1000;
+
+	return ret;
+}
+
+static struct thermal_zone_device_ops proc_thermal_local_ops = {
+	.get_temp       = proc_thermal_get_zone_temp,
+};
+
 static int proc_thermal_add(struct device *dev,
 			    struct proc_thermal_device **priv)
 {
@@ -126,6 +201,8 @@ static int proc_thermal_add(struct device *dev,
 	struct acpi_buffer buf = { ACPI_ALLOCATE_BUFFER, NULL };
 	union acpi_object *elements, *ppcc;
 	union acpi_object *p;
+	unsigned long long tmp;
+	struct thermal_zone_device_ops *ops = NULL;
 	int i;
 	int ret;
 
@@ -178,6 +255,24 @@ static int proc_thermal_add(struct device *dev,
 
 	ret = sysfs_create_group(&dev->kobj,
 				 &power_limit_attribute_group);
+	if (ret)
+		goto free_buffer;
+
+	status = acpi_evaluate_integer(adev->handle, "_TMP", NULL, &tmp);
+	if (ACPI_FAILURE(status)) {
+		/* there is no _TMP method, add local method */
+		stored_tjmax = get_tjmax();
+		if (stored_tjmax > 0)
+			ops = &proc_thermal_local_ops;
+	}
+
+	proc_priv->int340x_zone = int340x_thermal_zone_add(adev, ops);
+	if (IS_ERR(proc_priv->int340x_zone)) {
+		sysfs_remove_group(&proc_priv->dev->kobj,
+			   &power_limit_attribute_group);
+		ret = PTR_ERR(proc_priv->int340x_zone);
+	} else
+		ret = 0;
 
 free_buffer:
 	kfree(buf.pointer);
@@ -185,8 +280,9 @@ free_buffer:
 	return ret;
 }
 
-void proc_thermal_remove(struct proc_thermal_device *proc_priv)
+static void proc_thermal_remove(struct proc_thermal_device *proc_priv)
 {
+	int340x_thermal_zone_remove(proc_priv->int340x_zone);
 	sysfs_remove_group(&proc_priv->dev->kobj,
 			   &power_limit_attribute_group);
 }
@@ -218,6 +314,18 @@ static int int3401_remove(struct platform_device *pdev)
 	return 0;
 }
 
+static irqreturn_t proc_thermal_pci_msi_irq(int irq, void *devid)
+{
+	struct proc_thermal_device *proc_priv;
+	struct pci_dev *pdev = devid;
+
+	proc_priv = pci_get_drvdata(pdev);
+
+	intel_soc_dts_iosf_interrupt_handler(proc_priv->soc_dts);
+
+	return IRQ_HANDLED;
+}
+
 static int  proc_thermal_pci_probe(struct pci_dev *pdev,
 				   const struct pci_device_id *unused)
 {
@@ -244,18 +352,57 @@ static int  proc_thermal_pci_probe(struct pci_dev *pdev,
 	pci_set_drvdata(pdev, proc_priv);
 	proc_thermal_emum_mode = PROC_THERMAL_PCI;
 
+	if (pdev->device == PCI_DEVICE_ID_PROC_BSW_THERMAL) {
+		/*
+		 * Enumerate additional DTS sensors available via IOSF.
+		 * But we are not treating as a failure condition, if
+		 * there are no aux DTSs enabled or fails. This driver
+		 * already exposes sensors, which can be accessed via
+		 * ACPI/MSR. So we don't want to fail for auxiliary DTSs.
+		 */
+		proc_priv->soc_dts = intel_soc_dts_iosf_init(
+					INTEL_SOC_DTS_INTERRUPT_MSI, 2, 0);
+
+		if (proc_priv->soc_dts && pdev->irq) {
+			ret = pci_enable_msi(pdev);
+			if (!ret) {
+				ret = request_threaded_irq(pdev->irq, NULL,
+						proc_thermal_pci_msi_irq,
+						IRQF_ONESHOT, "proc_thermal",
+						pdev);
+				if (ret) {
+					intel_soc_dts_iosf_exit(
+							proc_priv->soc_dts);
+					pci_disable_msi(pdev);
+					proc_priv->soc_dts = NULL;
+				}
+			}
+		} else
+			dev_err(&pdev->dev, "No auxiliary DTSs enabled\n");
+	}
+
 	return 0;
 }
 
 static void  proc_thermal_pci_remove(struct pci_dev *pdev)
 {
-	proc_thermal_remove(pci_get_drvdata(pdev));
+	struct proc_thermal_device *proc_priv = pci_get_drvdata(pdev);
+
+	if (proc_priv->soc_dts) {
+		intel_soc_dts_iosf_exit(proc_priv->soc_dts);
+		if (pdev->irq) {
+			free_irq(pdev->irq, pdev);
+			pci_disable_msi(pdev);
+		}
+	}
+	proc_thermal_remove(proc_priv);
 	pci_disable_device(pdev);
 }
 
 static const struct pci_device_id proc_thermal_pci_ids[] = {
 	{ PCI_DEVICE(PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_PROC_BDW_THERMAL)},
 	{ PCI_DEVICE(PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_PROC_HSB_THERMAL)},
+	{ PCI_DEVICE(PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_PROC_SKL_THERMAL)},
 	{ PCI_DEVICE(PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_PROC_BSW_THERMAL)},
 	{ 0, },
 };

@@ -104,7 +104,7 @@ asmlinkage void __init nios2_boot_init(unsigned r4, unsigned r5, unsigned r6,
 				       unsigned r7)
 {
 	unsigned dtb_passed = 0;
-	char cmdline_passed[COMMAND_LINE_SIZE] = { 0, };
+	char cmdline_passed[COMMAND_LINE_SIZE] __maybe_unused = { 0, };
 
 #if defined(CONFIG_NIOS2_PASS_CMDLINE)
 	if (r4 == 0x534f494e) { /* r4 is magic NIOS */
@@ -138,6 +138,10 @@ void __init setup_arch(char **cmdline_p)
 	int bootmap_size;
 
 	console_verbose();
+
+#ifdef CONFIG_EARLY_PRINTK
+	setup_early_printk();
+#endif
 
 	memory_start = PAGE_ALIGN((unsigned long)__pa(_end));
 	memory_end = (unsigned long) CONFIG_NIOS2_MEM_BASE + memory_size;

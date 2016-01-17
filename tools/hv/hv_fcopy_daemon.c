@@ -43,15 +43,9 @@ static int hv_start_fcopy(struct hv_start_fcopy *smsg)
 	int error = HV_E_FAIL;
 	char *q, *p;
 
-	/*
-	 * If possile append a path seperator to the path.
-	 */
-	if (strlen((char *)smsg->path_name) < (W_MAX_PATH - 2))
-		strcat((char *)smsg->path_name, "/");
-
 	p = (char *)smsg->path_name;
 	snprintf(target_fname, sizeof(target_fname), "%s/%s",
-		(char *)smsg->path_name, smsg->file_name);
+		 (char *)smsg->path_name, (char *)smsg->file_name);
 
 	syslog(LOG_INFO, "Target file name: %s", target_fname);
 	/*
@@ -137,12 +131,14 @@ void print_usage(char *argv[])
 
 int main(int argc, char *argv[])
 {
-	int fd, fcopy_fd, len;
+	int fcopy_fd, len;
 	int error;
 	int daemonize = 1, long_index = 0, opt;
 	int version = FCOPY_CURRENT_VERSION;
 	char *buffer[4096 * 2];
 	struct hv_fcopy_hdr *in_msg;
+	int in_handshake = 1;
+	__u32 kernel_modver;
 
 	static struct option long_options[] = {
 		{"help",	no_argument,	   0,  'h' },
@@ -197,6 +193,19 @@ int main(int argc, char *argv[])
 			syslog(LOG_ERR, "pread failed: %s", strerror(errno));
 			exit(EXIT_FAILURE);
 		}
+
+		if (in_handshake) {
+			if (len != sizeof(kernel_modver)) {
+				syslog(LOG_ERR, "invalid version negotiation");
+				exit(EXIT_FAILURE);
+			}
+			kernel_modver = *(__u32 *)buffer;
+			in_handshake = 0;
+			syslog(LOG_INFO, "HV_FCOPY: kernel module version: %d",
+			       kernel_modver);
+			continue;
+		}
+
 		in_msg = (struct hv_fcopy_hdr *)buffer;
 
 		switch (in_msg->operation) {

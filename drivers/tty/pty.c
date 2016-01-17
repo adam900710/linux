@@ -7,7 +7,6 @@
  */
 
 #include <linux/module.h>
-
 #include <linux/errno.h>
 #include <linux/interrupt.h>
 #include <linux/tty.h>
@@ -26,6 +25,12 @@
 #include <linux/mutex.h>
 #include <linux/poll.h>
 
+#undef TTY_DEBUG_HANGUP
+#ifdef TTY_DEBUG_HANGUP
+# define tty_debug_hangup(tty, f, args...)	tty_debug(tty, f, ##args)
+#else
+# define tty_debug_hangup(tty, f, args...)	do {} while (0)
+#endif
 
 #ifdef CONFIG_UNIX98_PTYS
 static struct tty_driver *ptm_driver;
@@ -53,9 +58,8 @@ static void pty_close(struct tty_struct *tty, struct file *filp)
 	/* Review - krefs on tty_link ?? */
 	if (!tty->link)
 		return;
-	tty_flush_to_ldisc(tty->link);
 	set_bit(TTY_OTHER_CLOSED, &tty->link->flags);
-	wake_up_interruptible(&tty->link->read_wait);
+	tty_flip_buffer_push(tty->link->port);
 	wake_up_interruptible(&tty->link->write_wait);
 	if (tty->driver->subtype == PTY_TYPE_MASTER) {
 		set_bit(TTY_OTHER_CLOSED, &tty->flags);
@@ -85,19 +89,6 @@ static void pty_unthrottle(struct tty_struct *tty)
 {
 	tty_wakeup(tty->link);
 	set_bit(TTY_THROTTLED, &tty->flags);
-}
-
-/**
- *	pty_space	-	report space left for writing
- *	@to: tty we are writing into
- *
- *	Limit the buffer space used by ptys to 8k.
- */
-
-static int pty_space(struct tty_struct *to)
-{
-	int n = tty_buffer_space_avail(to->port);
-	return min(n, 8192);
 }
 
 /**
@@ -141,7 +132,7 @@ static int pty_write_room(struct tty_struct *tty)
 {
 	if (tty->stopped)
 		return 0;
-	return pty_space(tty->link);
+	return tty_buffer_space_avail(tty->link->port);
 }
 
 /**
@@ -210,6 +201,9 @@ static int pty_signal(struct tty_struct *tty, int sig)
 {
 	struct pid *pgrp;
 
+	if (sig != SIGINT && sig != SIGQUIT && sig != SIGTSTP)
+		return -EINVAL;
+
 	if (tty->link) {
 		pgrp = tty_get_pgrp(tty->link);
 		if (pgrp)
@@ -222,10 +216,16 @@ static int pty_signal(struct tty_struct *tty, int sig)
 static void pty_flush_buffer(struct tty_struct *tty)
 {
 	struct tty_struct *to = tty->link;
+	struct tty_ldisc *ld;
 
 	if (!to)
 		return;
-	/* tty_buffer_flush(to); FIXME */
+
+	ld = tty_ldisc_ref(to);
+	tty_buffer_flush(to, ld);
+	if (ld)
+		tty_ldisc_deref(ld);
+
 	if (to->packet) {
 		spin_lock_irq(&tty->ctrl_lock);
 		tty->ctrl_status |= TIOCPKT_FLUSHWRITE;
@@ -247,7 +247,9 @@ static int pty_open(struct tty_struct *tty, struct file *filp)
 		goto out;
 
 	clear_bit(TTY_IO_ERROR, &tty->flags);
+	/* TTY_OTHER_CLOSED must be cleared before TTY_OTHER_DONE */
 	clear_bit(TTY_OTHER_CLOSED, &tty->link->flags);
+	clear_bit(TTY_OTHER_DONE, &tty->link->flags);
 	set_bit(TTY_THROTTLED, &tty->flags);
 	return 0;
 
@@ -399,6 +401,7 @@ static int pty_common_install(struct tty_driver *driver, struct tty_struct *tty,
 		goto err_put_module;
 
 	tty_set_lock_subclass(o_tty);
+	lockdep_set_subclass(&o_tty->termios_rwsem, TTY_LOCK_SLAVE);
 
 	if (legacy) {
 		/* We always use new tty termios data so we can do this
@@ -429,9 +432,13 @@ static int pty_common_install(struct tty_driver *driver, struct tty_struct *tty,
 	o_tty->link = tty;
 	tty_port_init(ports[0]);
 	tty_port_init(ports[1]);
+	tty_buffer_set_limit(ports[0], 8192);
+	tty_buffer_set_limit(ports[1], 8192);
 	o_tty->port = ports[0];
 	tty->port = ports[1];
 	o_tty->port->itty = o_tty;
+
+	tty_buffer_set_lock_subclass(o_tty->port);
 
 	tty_driver_kref_get(driver);
 	tty->count++;
@@ -493,6 +500,10 @@ static int pty_bsd_ioctl(struct tty_struct *tty,
 }
 
 static int legacy_count = CONFIG_LEGACY_PTY_COUNT;
+/*
+ * not really modular, but the easiest way to keep compat with existing
+ * bootargs behaviour is to continue using module_param here.
+ */
 module_param(legacy_count, int, 0);
 
 /*
@@ -777,6 +788,8 @@ static int ptmx_open(struct inode *inode, struct file *filp)
 	if (retval)
 		goto err_release;
 
+	tty_debug_hangup(tty, "(tty count=%d)\n", tty->count);
+
 	tty_unlock(tty);
 	return 0;
 err_release:
@@ -867,4 +880,4 @@ static int __init pty_init(void)
 	unix98_pty_init();
 	return 0;
 }
-module_init(pty_init);
+device_initcall(pty_init);

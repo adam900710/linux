@@ -39,6 +39,7 @@
 #include "t4vf_defs.h"
 
 #include "../cxgb4/t4_regs.h"
+#include "../cxgb4/t4_values.h"
 #include "../cxgb4/t4fw_api.h"
 
 /*
@@ -137,9 +138,9 @@ int t4vf_wr_mbox_core(struct adapter *adapter, const void *cmd, int size,
 	 * Loop trying to get ownership of the mailbox.  Return an error
 	 * if we can't gain ownership.
 	 */
-	v = MBOWNER_GET(t4_read_reg(adapter, mbox_ctl));
+	v = MBOWNER_G(t4_read_reg(adapter, mbox_ctl));
 	for (i = 0; v == MBOX_OWNER_NONE && i < 3; i++)
-		v = MBOWNER_GET(t4_read_reg(adapter, mbox_ctl));
+		v = MBOWNER_G(t4_read_reg(adapter, mbox_ctl));
 	if (v != MBOX_OWNER_DRV)
 		return v == MBOX_OWNER_FW ? -EBUSY : -ETIMEDOUT;
 
@@ -161,7 +162,7 @@ int t4vf_wr_mbox_core(struct adapter *adapter, const void *cmd, int size,
 	t4_read_reg(adapter, mbox_data);         /* flush write */
 
 	t4_write_reg(adapter, mbox_ctl,
-		     MBMSGVALID | MBOWNER(MBOX_OWNER_FW));
+		     MBMSGVALID_F | MBOWNER_V(MBOX_OWNER_FW));
 	t4_read_reg(adapter, mbox_ctl);          /* flush write */
 
 	/*
@@ -183,14 +184,14 @@ int t4vf_wr_mbox_core(struct adapter *adapter, const void *cmd, int size,
 		 * If we're the owner, see if this is the reply we wanted.
 		 */
 		v = t4_read_reg(adapter, mbox_ctl);
-		if (MBOWNER_GET(v) == MBOX_OWNER_DRV) {
+		if (MBOWNER_G(v) == MBOX_OWNER_DRV) {
 			/*
 			 * If the Message Valid bit isn't on, revoke ownership
 			 * of the mailbox and continue waiting for our reply.
 			 */
-			if ((v & MBMSGVALID) == 0) {
+			if ((v & MBMSGVALID_F) == 0) {
 				t4_write_reg(adapter, mbox_ctl,
-					     MBOWNER(MBOX_OWNER_NONE));
+					     MBOWNER_V(MBOX_OWNER_NONE));
 				continue;
 			}
 
@@ -209,14 +210,14 @@ int t4vf_wr_mbox_core(struct adapter *adapter, const void *cmd, int size,
 
 			if (rpl) {
 				/* request bit in high-order BE word */
-				WARN_ON((be32_to_cpu(*(const u32 *)cmd)
+				WARN_ON((be32_to_cpu(*(const __be32 *)cmd)
 					 & FW_CMD_REQUEST_F) == 0);
 				get_mbox_rpl(adapter, rpl, size, mbox_data);
-				WARN_ON((be32_to_cpu(*(u32 *)rpl)
+				WARN_ON((be32_to_cpu(*(__be32 *)rpl)
 					 & FW_CMD_REQUEST_F) != 0);
 			}
 			t4_write_reg(adapter, mbox_ctl,
-				     MBOWNER(MBOX_OWNER_NONE));
+				     MBOWNER_V(MBOX_OWNER_NONE));
 			return -FW_CMD_RETVAL_G(v);
 		}
 	}
@@ -338,7 +339,7 @@ int t4vf_port_init(struct adapter *adapter, int pidx)
  *      @adapter: the adapter
  *
  *	Issues a reset command to FW.  For a Physical Function this would
- *	result in the Firmware reseting all of its state.  For a Virtual
+ *	result in the Firmware resetting all of its state.  For a Virtual
  *	Function this just resets the state associated with the VF.
  */
 int t4vf_fw_reset(struct adapter *adapter)
@@ -427,7 +428,7 @@ int t4vf_set_params(struct adapter *adapter, unsigned int nparams,
 }
 
 /**
- *	t4_bar2_sge_qregs - return BAR2 SGE Queue register information
+ *	t4vf_bar2_sge_qregs - return BAR2 SGE Queue register information
  *	@adapter: the adapter
  *	@qid: the Queue ID
  *	@qtype: the Ingress or Egress type for @qid
@@ -451,11 +452,11 @@ int t4vf_set_params(struct adapter *adapter, unsigned int nparams,
  *	Write Combining Doorbell Buffer. If the BAR2 Queue ID is not 0,
  *	then these "Inferred Queue ID" register may not be used.
  */
-int t4_bar2_sge_qregs(struct adapter *adapter,
-		      unsigned int qid,
-		      enum t4_bar2_qtype qtype,
-		      u64 *pbar2_qoffset,
-		      unsigned int *pbar2_qid)
+int t4vf_bar2_sge_qregs(struct adapter *adapter,
+			unsigned int qid,
+			enum t4_bar2_qtype qtype,
+			u64 *pbar2_qoffset,
+			unsigned int *pbar2_qid)
 {
 	unsigned int page_shift, page_size, qpp_shift, qpp_mask;
 	u64 bar2_page_offset, bar2_qoffset;
@@ -483,7 +484,7 @@ int t4_bar2_sge_qregs(struct adapter *adapter,
 	 *  o The BAR2 Queue ID.
 	 *  o The BAR2 Queue ID Offset into the BAR2 page.
 	 */
-	bar2_page_offset = ((qid >> qpp_shift) << page_shift);
+	bar2_page_offset = ((u64)(qid >> qpp_shift) << page_shift);
 	bar2_qid = qid & qpp_mask;
 	bar2_qid_offset = bar2_qid * SGE_UDB_SIZE;
 
@@ -530,19 +531,19 @@ int t4vf_get_sge_params(struct adapter *adapter)
 	int v;
 
 	params[0] = (FW_PARAMS_MNEM_V(FW_PARAMS_MNEM_REG) |
-		     FW_PARAMS_PARAM_XYZ_V(SGE_CONTROL));
+		     FW_PARAMS_PARAM_XYZ_V(SGE_CONTROL_A));
 	params[1] = (FW_PARAMS_MNEM_V(FW_PARAMS_MNEM_REG) |
-		     FW_PARAMS_PARAM_XYZ_V(SGE_HOST_PAGE_SIZE));
+		     FW_PARAMS_PARAM_XYZ_V(SGE_HOST_PAGE_SIZE_A));
 	params[2] = (FW_PARAMS_MNEM_V(FW_PARAMS_MNEM_REG) |
-		     FW_PARAMS_PARAM_XYZ_V(SGE_FL_BUFFER_SIZE0));
+		     FW_PARAMS_PARAM_XYZ_V(SGE_FL_BUFFER_SIZE0_A));
 	params[3] = (FW_PARAMS_MNEM_V(FW_PARAMS_MNEM_REG) |
-		     FW_PARAMS_PARAM_XYZ_V(SGE_FL_BUFFER_SIZE1));
+		     FW_PARAMS_PARAM_XYZ_V(SGE_FL_BUFFER_SIZE1_A));
 	params[4] = (FW_PARAMS_MNEM_V(FW_PARAMS_MNEM_REG) |
-		     FW_PARAMS_PARAM_XYZ_V(SGE_TIMER_VALUE_0_AND_1));
+		     FW_PARAMS_PARAM_XYZ_V(SGE_TIMER_VALUE_0_AND_1_A));
 	params[5] = (FW_PARAMS_MNEM_V(FW_PARAMS_MNEM_REG) |
-		     FW_PARAMS_PARAM_XYZ_V(SGE_TIMER_VALUE_2_AND_3));
+		     FW_PARAMS_PARAM_XYZ_V(SGE_TIMER_VALUE_2_AND_3_A));
 	params[6] = (FW_PARAMS_MNEM_V(FW_PARAMS_MNEM_REG) |
-		     FW_PARAMS_PARAM_XYZ_V(SGE_TIMER_VALUE_4_AND_5));
+		     FW_PARAMS_PARAM_XYZ_V(SGE_TIMER_VALUE_4_AND_5_A));
 	v = t4vf_query_params(adapter, 7, params, vals);
 	if (v)
 		return v;
@@ -578,9 +579,9 @@ int t4vf_get_sge_params(struct adapter *adapter)
 	}
 
 	params[0] = (FW_PARAMS_MNEM_V(FW_PARAMS_MNEM_REG) |
-		     FW_PARAMS_PARAM_XYZ_V(SGE_INGRESS_RX_THRESHOLD));
+		     FW_PARAMS_PARAM_XYZ_V(SGE_INGRESS_RX_THRESHOLD_A));
 	params[1] = (FW_PARAMS_MNEM_V(FW_PARAMS_MNEM_REG) |
-		     FW_PARAMS_PARAM_XYZ_V(SGE_CONM_CTRL));
+		     FW_PARAMS_PARAM_XYZ_V(SGE_CONM_CTRL_A));
 	v = t4vf_query_params(adapter, 2, params, vals);
 	if (v)
 		return v;
@@ -617,8 +618,9 @@ int t4vf_get_sge_params(struct adapter *adapter)
 		 * the driver can just use it.
 		 */
 		whoami = t4_read_reg(adapter,
-				     T4VF_PL_BASE_ADDR + A_PL_VF_WHOAMI);
-		pf = SOURCEPF_GET(whoami);
+				     T4VF_PL_BASE_ADDR + PL_VF_WHOAMI_A);
+		pf = CHELSIO_CHIP_VERSION(adapter->params.chip) <= CHELSIO_T5 ?
+			SOURCEPF_G(whoami) : T6_SOURCEPF_G(whoami);
 
 		s_hps = (HOSTPAGESIZEPF0_S +
 			 (HOSTPAGESIZEPF1_S - HOSTPAGESIZEPF0_S) * pf);
@@ -630,10 +632,10 @@ int t4vf_get_sge_params(struct adapter *adapter)
 			 (QUEUESPERPAGEPF1_S - QUEUESPERPAGEPF0_S) * pf);
 		sge_params->sge_vf_eq_qpp =
 			((sge_params->sge_egress_queues_per_page >> s_qpp)
-			 & QUEUESPERPAGEPF0_MASK);
+			 & QUEUESPERPAGEPF0_M);
 		sge_params->sge_vf_iq_qpp =
 			((sge_params->sge_ingress_queues_per_page >> s_qpp)
-			 & QUEUESPERPAGEPF0_MASK);
+			 & QUEUESPERPAGEPF0_M);
 	}
 
 	return 0;
@@ -1190,9 +1192,7 @@ int t4vf_alloc_mac_filt(struct adapter *adapter, unsigned int viid, bool free,
 	unsigned nfilters = 0;
 	unsigned int rem = naddr;
 	struct fw_vi_mac_cmd cmd, rpl;
-	unsigned int max_naddr = is_t4(adapter->params.chip) ?
-				 NUM_MPS_CLS_SRAM_L_INSTANCES :
-				 NUM_MPS_T5_CLS_SRAM_L_INSTANCES;
+	unsigned int max_naddr = adapter->params.arch.mps_tcam_size;
 
 	if (naddr > max_naddr)
 		return -EINVAL;
@@ -1284,9 +1284,7 @@ int t4vf_change_mac(struct adapter *adapter, unsigned int viid,
 	struct fw_vi_mac_exact *p = &cmd.u.exact[0];
 	size_t len16 = DIV_ROUND_UP(offsetof(struct fw_vi_mac_cmd,
 					     u.exact[1]), 16);
-	unsigned int max_naddr = is_t4(adapter->params.chip) ?
-				 NUM_MPS_CLS_SRAM_L_INSTANCES :
-				 NUM_MPS_T5_CLS_SRAM_L_INSTANCES;
+	unsigned int max_mac_addr = adapter->params.arch.mps_tcam_size;
 
 	/*
 	 * If this is a new allocation, determine whether it should be
@@ -1309,7 +1307,7 @@ int t4vf_change_mac(struct adapter *adapter, unsigned int viid,
 	if (ret == 0) {
 		p = &rpl.u.exact[0];
 		ret = FW_VI_MAC_CMD_IDX_G(be16_to_cpu(p->valid_to_idx));
-		if (ret >= max_naddr)
+		if (ret >= max_mac_addr)
 			ret = -ENOMEM;
 	}
 	return ret;
@@ -1589,11 +1587,25 @@ int t4vf_prep_adapter(struct adapter *adapter)
 	switch (CHELSIO_PCI_ID_VER(adapter->pdev->device)) {
 	case CHELSIO_T4:
 		adapter->params.chip |= CHELSIO_CHIP_CODE(CHELSIO_T4, 0);
+		adapter->params.arch.sge_fl_db = DBPRIO_F;
+		adapter->params.arch.mps_tcam_size =
+				NUM_MPS_CLS_SRAM_L_INSTANCES;
 		break;
 
 	case CHELSIO_T5:
-		chipid = G_REV(t4_read_reg(adapter, A_PL_VF_REV));
+		chipid = REV_G(t4_read_reg(adapter, PL_VF_REV_A));
 		adapter->params.chip |= CHELSIO_CHIP_CODE(CHELSIO_T5, chipid);
+		adapter->params.arch.sge_fl_db = DBPRIO_F | DBTYPE_F;
+		adapter->params.arch.mps_tcam_size =
+				NUM_MPS_T5_CLS_SRAM_L_INSTANCES;
+		break;
+
+	case CHELSIO_T6:
+		chipid = REV_G(t4_read_reg(adapter, PL_VF_REV_A));
+		adapter->params.chip |= CHELSIO_CHIP_CODE(CHELSIO_T6, chipid);
+		adapter->params.arch.sge_fl_db = 0;
+		adapter->params.arch.mps_tcam_size =
+				NUM_MPS_T5_CLS_SRAM_L_INSTANCES;
 		break;
 	}
 

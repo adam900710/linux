@@ -45,6 +45,9 @@ config COMPAT_NETLINK_MESSAGES
 	  Newly written code should NEVER need this option but do
 	  compat-independent messages instead!
 
+config NET_INGRESS
+	bool
+
 menu "Networking options"
 
 source "net/packet/Kconfig"
@@ -229,20 +232,21 @@ source "net/netlink/Kconfig"
 source "net/mpls/Kconfig"
 source "net/hsr/Kconfig"
 source "net/switchdev/Kconfig"
+source "net/l3mdev/Kconfig"
 
 config RPS
-	boolean
+	bool
 	depends on SMP && SYSFS
 	default y
 
 config RFS_ACCEL
-	boolean
+	bool
 	depends on RPS
 	select CPU_RMAP
 	default y
 
 config XPS
-	boolean
+	bool
 	depends on SMP
 	default y
 
@@ -254,18 +258,18 @@ config CGROUP_NET_PRIO
 	  a per-interface basis.
 
 config CGROUP_NET_CLASSID
-	boolean "Network classid cgroup"
+	bool "Network classid cgroup"
 	depends on CGROUPS
 	---help---
 	  Cgroup subsystem for use as general purpose socket classid marker that is
 	  being used in cls_cgroup and for netfilter matching.
 
 config NET_RX_BUSY_POLL
-	boolean
+	bool
 	default y
 
 config BQL
-	boolean
+	bool
 	depends on SYSFS
 	select DQL
 	default y
@@ -282,7 +286,7 @@ config BPF_JIT
 	  this feature changing /proc/sys/net/core/bpf_jit_enable
 
 config NET_FLOW_LIMIT
-	boolean
+	bool
 	depends on RPS
 	default y
 	---help---
@@ -371,6 +375,13 @@ source "net/caif/Kconfig"
 source "net/ceph/Kconfig"
 source "net/nfc/Kconfig"
 
+config LWTUNNEL
+	bool "Network light weight tunnels"
+	---help---
+	  This feature provides an infrastructure to support light weight
+	  tunnels like mpls. There is no netdevice associated with a light
+	  weight tunnel endpoint. Tunnel encapsulation parameters are stored
+	  with light weight tunnel state associated with fib routes.
 
 endif   # if NET
 

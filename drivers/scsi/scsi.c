@@ -98,52 +98,6 @@ EXPORT_SYMBOL(scsi_sd_probe_domain);
 ASYNC_DOMAIN_EXCLUSIVE(scsi_sd_pm_domain);
 EXPORT_SYMBOL(scsi_sd_pm_domain);
 
-/* NB: These are exposed through /proc/scsi/scsi and form part of the ABI.
- * You may not alter any existing entry (although adding new ones is
- * encouraged once assigned by ANSI/INCITS T10
- */
-static const char *const scsi_device_types[] = {
-	"Direct-Access    ",
-	"Sequential-Access",
-	"Printer          ",
-	"Processor        ",
-	"WORM             ",
-	"CD-ROM           ",
-	"Scanner          ",
-	"Optical Device   ",
-	"Medium Changer   ",
-	"Communications   ",
-	"ASC IT8          ",
-	"ASC IT8          ",
-	"RAID             ",
-	"Enclosure        ",
-	"Direct-Access-RBC",
-	"Optical card     ",
-	"Bridge controller",
-	"Object storage   ",
-	"Automation/Drive ",
-	"Security Manager ",
-	"Direct-Access-ZBC",
-};
-
-/**
- * scsi_device_type - Return 17 char string indicating device type.
- * @type: type number to look up
- */
-
-const char * scsi_device_type(unsigned type)
-{
-	if (type == 0x1e)
-		return "Well-known LUN   ";
-	if (type == 0x1f)
-		return "No Device        ";
-	if (type >= ARRAY_SIZE(scsi_device_types))
-		return "Unknown          ";
-	return scsi_device_types[type];
-}
-
-EXPORT_SYMBOL(scsi_device_type);
-
 struct scsi_host_cmd_pool {
 	struct kmem_cache	*cmd_slab;
 	struct kmem_cache	*sense_slab;
@@ -531,7 +485,7 @@ void scsi_log_send(struct scsi_cmnd *cmd)
 	 *
 	 * 3: same as 2
 	 *
-	 * 4: same as 3 plus dump extra junk
+	 * 4: same as 3
 	 */
 	if (unlikely(scsi_logging_level)) {
 		level = SCSI_LOG_LEVEL(SCSI_LOG_MLQUEUE_SHIFT,
@@ -540,13 +494,6 @@ void scsi_log_send(struct scsi_cmnd *cmd)
 			scmd_printk(KERN_INFO, cmd,
 				    "Send: scmd 0x%p\n", cmd);
 			scsi_print_command(cmd);
-			if (level > 3) {
-				printk(KERN_INFO "buffer = 0x%p, bufflen = %d,"
-				       " queuecommand 0x%p\n",
-					scsi_sglist(cmd), scsi_bufflen(cmd),
-					cmd->device->host->hostt->queuecommand);
-
-			}
 		}
 	}
 }
@@ -572,7 +519,7 @@ void scsi_log_completion(struct scsi_cmnd *cmd, int disposition)
 				       SCSI_LOG_MLCOMPLETE_BITS);
 		if (((level > 0) && (cmd->result || disposition != SUCCESS)) ||
 		    (level > 1)) {
-			scsi_print_result(cmd, "Done: ", disposition);
+			scsi_print_result(cmd, "Done", disposition);
 			scsi_print_command(cmd);
 			if (status_byte(cmd->result) & CHECK_CONDITION)
 				scsi_print_sense(cmd);
@@ -669,32 +616,11 @@ void scsi_finish_command(struct scsi_cmnd *cmd)
  */
 int scsi_change_queue_depth(struct scsi_device *sdev, int depth)
 {
-	unsigned long flags;
-
-	if (depth <= 0)
-		goto out;
-
-	spin_lock_irqsave(sdev->request_queue->queue_lock, flags);
-
-	/*
-	 * Check to see if the queue is managed by the block layer.
-	 * If it is, and we fail to adjust the depth, exit.
-	 *
-	 * Do not resize the tag map if it is a host wide share bqt,
-	 * because the size should be the hosts's can_queue. If there
-	 * is more IO than the LLD's can_queue (so there are not enuogh
-	 * tags) request_fn's host queue ready check will handle it.
-	 */
-	if (!shost_use_blk_mq(sdev->host) && !sdev->host->bqt) {
-		if (blk_queue_tagged(sdev->request_queue) &&
-		    blk_queue_resize_tags(sdev->request_queue, depth) != 0)
-			goto out_unlock;
+	if (depth > 0) {
+		sdev->queue_depth = depth;
+		wmb();
 	}
 
-	sdev->queue_depth = depth;
-out_unlock:
-	spin_unlock_irqrestore(sdev->request_queue->queue_lock, flags);
-out:
 	return sdev->queue_depth;
 }
 EXPORT_SYMBOL(scsi_change_queue_depth);
@@ -979,18 +905,24 @@ EXPORT_SYMBOL(scsi_report_opcode);
  * Description: Gets a reference to the scsi_device and increments the use count
  * of the underlying LLDD module.  You must hold host_lock of the
  * parent Scsi_Host or already have a reference when calling this.
+ *
+ * This will fail if a device is deleted or cancelled, or when the LLD module
+ * is in the process of being unloaded.
  */
 int scsi_device_get(struct scsi_device *sdev)
 {
-	if (sdev->sdev_state == SDEV_DEL)
-		return -ENXIO;
+	if (sdev->sdev_state == SDEV_DEL || sdev->sdev_state == SDEV_CANCEL)
+		goto fail;
 	if (!get_device(&sdev->sdev_gendev))
-		return -ENXIO;
-	/* We can fail this if we're doing SCSI operations
-	 * from module exit (like cache flush) */
-	try_module_get(sdev->host->hostt->module);
-
+		goto fail;
+	if (!try_module_get(sdev->host->hostt->module))
+		goto fail_put_device;
 	return 0;
+
+fail_put_device:
+	put_device(&sdev->sdev_gendev);
+fail:
+	return -ENXIO;
 }
 EXPORT_SYMBOL(scsi_device_get);
 
@@ -1004,14 +936,7 @@ EXPORT_SYMBOL(scsi_device_get);
  */
 void scsi_device_put(struct scsi_device *sdev)
 {
-#ifdef CONFIG_MODULE_UNLOAD
-	struct module *module = sdev->host->hostt->module;
-
-	/* The module refcount will be zero if scsi_device_get()
-	 * was called from a module removal routine */
-	if (module && module_refcount(module) != 0)
-		module_put(module);
-#endif
+	module_put(sdev->host->hostt->module);
 	put_device(&sdev->sdev_gendev);
 }
 EXPORT_SYMBOL(scsi_device_put);

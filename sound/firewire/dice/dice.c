@@ -12,9 +12,11 @@ MODULE_AUTHOR("Clemens Ladisch <clemens@ladisch.de>");
 MODULE_LICENSE("GPL v2");
 
 #define OUI_WEISS		0x001c6a
+#define OUI_LOUD		0x000ff2
 
 #define DICE_CATEGORY_ID	0x04
 #define WEISS_CATEGORY_ID	0x00
+#define LOUD_CATEGORY_ID	0x10
 
 static int dice_interface_check(struct fw_unit *unit)
 {
@@ -29,7 +31,8 @@ static int dice_interface_check(struct fw_unit *unit)
 	struct fw_csr_iterator it;
 	int key, val, vendor = -1, model = -1, err;
 	unsigned int category, i;
-	__be32 *pointers, value;
+	__be32 *pointers;
+	u32 value;
 	__be32 version;
 
 	pointers = kmalloc_array(ARRAY_SIZE(min_values), sizeof(__be32),
@@ -56,6 +59,8 @@ static int dice_interface_check(struct fw_unit *unit)
 	}
 	if (vendor == OUI_WEISS)
 		category = WEISS_CATEGORY_ID;
+	else if (vendor == OUI_LOUD)
+		category = LOUD_CATEGORY_ID;
 	else
 		category = DICE_CATEGORY_ID;
 	if (device->config_rom[3] != ((vendor << 8) | category) ||
@@ -226,11 +231,20 @@ static void dice_card_strings(struct snd_dice *dice)
 	strcpy(card->mixername, "DICE");
 }
 
+/*
+ * This module releases the FireWire unit data after all ALSA character devices
+ * are released by applications. This is for releasing stream data or finishing
+ * transactions safely. Thus at returning from .remove(), this module still keep
+ * references for the unit.
+ */
 static void dice_card_free(struct snd_card *card)
 {
 	struct snd_dice *dice = card->private_data;
 
+	snd_dice_stream_destroy_duplex(dice);
 	snd_dice_transaction_destroy(dice);
+	fw_unit_put(dice->unit);
+
 	mutex_destroy(&dice->mutex);
 }
 
@@ -251,7 +265,7 @@ static int dice_probe(struct fw_unit *unit, const struct ieee1394_device_id *id)
 
 	dice = card->private_data;
 	dice->card = card;
-	dice->unit = unit;
+	dice->unit = fw_unit_get(unit);
 	card->private_free = dice_card_free;
 
 	spin_lock_init(&dice->lock);
@@ -305,10 +319,7 @@ static void dice_remove(struct fw_unit *unit)
 {
 	struct snd_dice *dice = dev_get_drvdata(&unit->device);
 
-	snd_card_disconnect(dice->card);
-
-	snd_dice_stream_destroy_duplex(dice);
-
+	/* No need to wait for releasing card object in this context. */
 	snd_card_free_when_closed(dice->card);
 }
 

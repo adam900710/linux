@@ -19,6 +19,7 @@
 #include <linux/string.h>
 #include <linux/slab.h>
 #include <linux/err.h>
+#include <linux/idr.h>
 
 #include "of_private.h"
 
@@ -85,7 +86,7 @@ static int of_overlay_apply_single_device_node(struct of_overlay *ov,
 		struct device_node *target, struct device_node *child)
 {
 	const char *cname;
-	struct device_node *tchild, *grandchild;
+	struct device_node *tchild;
 	int ret = 0;
 
 	cname = kbasename(child->full_name);
@@ -114,17 +115,6 @@ static int of_overlay_apply_single_device_node(struct of_overlay *ov,
 		ret = of_overlay_apply_one(ov, tchild, child);
 		if (ret)
 			return ret;
-
-		/* The properties are already copied, now do the child nodes */
-		for_each_child_of_node(child, grandchild) {
-			ret = of_overlay_apply_single_device_node(ov, tchild, grandchild);
-			if (ret) {
-				pr_err("%s: Failed to apply single node @%s/%s\n",
-					__func__, tchild->full_name,
-					grandchild->name);
-				return ret;
-			}
-		}
 	}
 
 	return ret;
@@ -159,6 +149,7 @@ static int of_overlay_apply_one(struct of_overlay *ov,
 			pr_err("%s: Failed to apply single node @%s/%s\n",
 					__func__, target->full_name,
 					child->name);
+			of_node_put(child);
 			return ret;
 		}
 	}
@@ -343,7 +334,7 @@ static DEFINE_IDR(ov_idr);
  * of the overlay in a list. This list can be used to prevent
  * illegal overlay removals.
  *
- * Returns the id of the created overlay, or an negative error number
+ * Returns the id of the created overlay, or a negative error number
  */
 int of_overlay_create(struct device_node *tree)
 {
@@ -427,8 +418,10 @@ static int overlay_subtree_check(struct device_node *tree,
 		return 1;
 
 	for_each_child_of_node(tree, child) {
-		if (overlay_subtree_check(child, dn))
+		if (overlay_subtree_check(child, dn)) {
+			of_node_put(child);
 			return 1;
+		}
 	}
 
 	return 0;
@@ -491,7 +484,7 @@ static int overlay_removal_is_ok(struct of_overlay *ov)
  *
  * Removes an overlay if it is permissible.
  *
- * Returns 0 on success, or an negative error number
+ * Returns 0 on success, or a negative error number
  */
 int of_overlay_destroy(int id)
 {
@@ -538,7 +531,7 @@ EXPORT_SYMBOL_GPL(of_overlay_destroy);
  *
  * Removes all overlays from the system in the correct order.
  *
- * Returns 0 on success, or an negative error number
+ * Returns 0 on success, or a negative error number
  */
 int of_overlay_destroy_all(void)
 {

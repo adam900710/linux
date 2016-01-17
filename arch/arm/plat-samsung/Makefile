@@ -20,17 +20,6 @@ obj-$(CONFIG_SAMSUNG_ATAGS)	+= platformdata.o
 
 obj-$(CONFIG_SAMSUNG_ATAGS)	+= devs.o
 obj-$(CONFIG_SAMSUNG_ATAGS)	+= dev-uart.o
-obj-$(CONFIG_S5P_DEV_MFC)	+= s5p-dev-mfc.o
-
-obj-$(CONFIG_SAMSUNG_DEV_BACKLIGHT)	+= dev-backlight.o
-
-obj-$(CONFIG_S3C_SETUP_CAMIF)	+= setup-camif.o
-
-# DMA support
-
-obj-$(CONFIG_S3C_DMA)		+= dma.o s3c-dma-ops.o
-
-obj-$(CONFIG_SAMSUNG_DMADEV)	+= dma-ops.o
 
 # PM support
 

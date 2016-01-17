@@ -1048,10 +1048,9 @@ static int omap_dev_ready(struct mtd_info *mtd)
  * @mtd: MTD device structure
  * @mode: Read/Write mode
  *
- * When using BCH, sector size is hardcoded to 512 bytes.
- * Using wrapping mode 6 both for reading and writing if ELM module not uses
- * for error correction.
- * On writing,
+ * When using BCH with SW correction (i.e. no ELM), sector size is set
+ * to 512 bytes and we use BCH_WRAPMODE_6 wrapping mode
+ * for both reading and writing with:
  * eccsize0 = 0  (no additional protected byte in spare area)
  * eccsize1 = 32 (skip 32 nibbles = 16 bytes per sector in spare area)
  */
@@ -1071,15 +1070,9 @@ static void __maybe_unused omap_enable_hwecc_bch(struct mtd_info *mtd, int mode)
 	case OMAP_ECC_BCH4_CODE_HW_DETECTION_SW:
 		bch_type = 0;
 		nsectors = 1;
-		if (mode == NAND_ECC_READ) {
-			wr_mode	  = BCH_WRAPMODE_6;
-			ecc_size0 = BCH_ECC_SIZE0;
-			ecc_size1 = BCH_ECC_SIZE1;
-		} else {
-			wr_mode   = BCH_WRAPMODE_6;
-			ecc_size0 = BCH_ECC_SIZE0;
-			ecc_size1 = BCH_ECC_SIZE1;
-		}
+		wr_mode	  = BCH_WRAPMODE_6;
+		ecc_size0 = BCH_ECC_SIZE0;
+		ecc_size1 = BCH_ECC_SIZE1;
 		break;
 	case OMAP_ECC_BCH4_CODE_HW:
 		bch_type = 0;
@@ -1097,15 +1090,9 @@ static void __maybe_unused omap_enable_hwecc_bch(struct mtd_info *mtd, int mode)
 	case OMAP_ECC_BCH8_CODE_HW_DETECTION_SW:
 		bch_type = 1;
 		nsectors = 1;
-		if (mode == NAND_ECC_READ) {
-			wr_mode	  = BCH_WRAPMODE_6;
-			ecc_size0 = BCH_ECC_SIZE0;
-			ecc_size1 = BCH_ECC_SIZE1;
-		} else {
-			wr_mode   = BCH_WRAPMODE_6;
-			ecc_size0 = BCH_ECC_SIZE0;
-			ecc_size1 = BCH_ECC_SIZE1;
-		}
+		wr_mode	  = BCH_WRAPMODE_6;
+		ecc_size0 = BCH_ECC_SIZE0;
+		ecc_size1 = BCH_ECC_SIZE1;
 		break;
 	case OMAP_ECC_BCH8_CODE_HW:
 		bch_type = 1;
@@ -1513,11 +1500,12 @@ static int omap_elm_correct_data(struct mtd_info *mtd, u_char *data,
  * @chip:		nand chip info structure
  * @buf:		data buffer
  * @oob_required:	must write chip->oob_poi to OOB
+ * @page:		page
  *
  * Custom write page method evolved to support multi sector writing in one shot
  */
 static int omap_write_page_bch(struct mtd_info *mtd, struct nand_chip *chip,
-				  const uint8_t *buf, int oob_required)
+			       const uint8_t *buf, int oob_required, int page)
 {
 	int i;
 	uint8_t *ecc_calc = chip->buffers->ecccalc;
@@ -1697,8 +1685,7 @@ static int omap_nand_probe(struct platform_device *pdev)
 	info->ecc_opt		= pdata->ecc_opt;
 	mtd			= &info->mtd;
 	mtd->priv		= &info->nand;
-	mtd->name		= dev_name(&pdev->dev);
-	mtd->owner		= THIS_MODULE;
+	mtd->dev.parent		= &pdev->dev;
 	nand_chip		= &info->nand;
 	nand_chip->ecc.priv	= NULL;
 

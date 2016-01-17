@@ -320,6 +320,20 @@ static void cfg80211_destroy_iface_wk(struct work_struct *work)
 	rtnl_unlock();
 }
 
+static void cfg80211_sched_scan_stop_wk(struct work_struct *work)
+{
+	struct cfg80211_registered_device *rdev;
+
+	rdev = container_of(work, struct cfg80211_registered_device,
+			   sched_scan_stop_wk);
+
+	rtnl_lock();
+
+	__cfg80211_stop_sched_scan(rdev, false);
+
+	rtnl_unlock();
+}
+
 /* exported functions */
 
 struct wiphy *wiphy_new_nm(const struct cfg80211_ops *ops, int sizeof_priv,
@@ -393,6 +407,9 @@ use_default_name:
 	INIT_LIST_HEAD(&rdev->bss_list);
 	INIT_WORK(&rdev->scan_done_wk, __cfg80211_scan_done);
 	INIT_WORK(&rdev->sched_scan_results_wk, __cfg80211_sched_scan_results);
+	INIT_LIST_HEAD(&rdev->mlme_unreg);
+	spin_lock_init(&rdev->mlme_unreg_lock);
+	INIT_WORK(&rdev->mlme_unreg_wk, cfg80211_mlme_unreg_wk);
 	INIT_DELAYED_WORK(&rdev->dfs_update_channels_wk,
 			  cfg80211_dfs_channels_update_work);
 #ifdef CONFIG_CFG80211_WEXT
@@ -402,10 +419,12 @@ use_default_name:
 	device_initialize(&rdev->wiphy.dev);
 	rdev->wiphy.dev.class = &ieee80211_class;
 	rdev->wiphy.dev.platform_data = rdev;
+	device_enable_async_suspend(&rdev->wiphy.dev);
 
 	INIT_LIST_HEAD(&rdev->destroy_list);
 	spin_lock_init(&rdev->destroy_list_lock);
 	INIT_WORK(&rdev->destroy_work, cfg80211_destroy_iface_wk);
+	INIT_WORK(&rdev->sched_scan_stop_wk, cfg80211_sched_scan_stop_wk);
 
 #ifdef CONFIG_CFG80211_DEFAULT_PS
 	rdev->wiphy.flags |= WIPHY_FLAG_PS_ON_BY_DEFAULT;
@@ -441,6 +460,9 @@ use_default_name:
 	rdev->wiphy.coverage_class = 0;
 
 	rdev->wiphy.max_num_csa_counters = 1;
+
+	rdev->wiphy.max_sched_scan_plans = 1;
+	rdev->wiphy.max_sched_scan_plan_interval = U32_MAX;
 
 	return &rdev->wiphy;
 }
@@ -560,6 +582,14 @@ int wiphy_register(struct wiphy *wiphy)
 				       BIT(NL80211_IFTYPE_MONITOR)))
 		wiphy->regulatory_flags |= REGULATORY_IGNORE_STALE_KICKOFF;
 
+	if (WARN_ON((wiphy->regulatory_flags & REGULATORY_WIPHY_SELF_MANAGED) &&
+		    (wiphy->regulatory_flags &
+					(REGULATORY_CUSTOM_REG |
+					 REGULATORY_STRICT_REG |
+					 REGULATORY_COUNTRY_IE_FOLLOW_POWER |
+					 REGULATORY_COUNTRY_IE_IGNORE))))
+		return -EINVAL;
+
 	if (WARN_ON(wiphy->coalesce &&
 		    (!wiphy->coalesce->n_rules ||
 		     !wiphy->coalesce->n_patterns) &&
@@ -609,7 +639,7 @@ int wiphy_register(struct wiphy *wiphy)
 		if (WARN_ON(!sband->n_channels))
 			return -EINVAL;
 		/*
-		 * on 60gHz band, there are no legacy rates, so
+		 * on 60GHz band, there are no legacy rates, so
 		 * n_bitrates is 0
 		 */
 		if (WARN_ON(band != IEEE80211_BAND_60GHZ &&
@@ -778,6 +808,8 @@ void wiphy_unregister(struct wiphy *wiphy)
 	flush_work(&rdev->event_work);
 	cancel_delayed_work_sync(&rdev->dfs_update_channels_wk);
 	flush_work(&rdev->destroy_work);
+	flush_work(&rdev->sched_scan_stop_wk);
+	flush_work(&rdev->mlme_unreg_wk);
 
 #ifdef CONFIG_PM
 	if (rdev->wiphy.wowlan_config && rdev->ops->set_wakeup)
@@ -831,6 +863,7 @@ void cfg80211_unregister_wdev(struct wireless_dev *wdev)
 
 	switch (wdev->iftype) {
 	case NL80211_IFTYPE_P2P_DEVICE:
+		cfg80211_mlme_purge_registrations(wdev);
 		cfg80211_stop_p2p_device(rdev, wdev);
 		break;
 	default:
@@ -858,6 +891,7 @@ void __cfg80211_leave(struct cfg80211_registered_device *rdev,
 		      struct wireless_dev *wdev)
 {
 	struct net_device *dev = wdev->netdev;
+	struct cfg80211_sched_scan_request *sched_scan_req;
 
 	ASSERT_RTNL();
 	ASSERT_WDEV_LOCK(wdev);
@@ -868,7 +902,8 @@ void __cfg80211_leave(struct cfg80211_registered_device *rdev,
 		break;
 	case NL80211_IFTYPE_P2P_CLIENT:
 	case NL80211_IFTYPE_STATION:
-		if (rdev->sched_scan_req && dev == rdev->sched_scan_req->dev)
+		sched_scan_req = rtnl_dereference(rdev->sched_scan_req);
+		if (sched_scan_req && dev == sched_scan_req->dev)
 			__cfg80211_stop_sched_scan(rdev, false);
 
 #ifdef CONFIG_CFG80211_WEXT
@@ -943,6 +978,7 @@ static int cfg80211_netdev_notifier_call(struct notifier_block *nb,
 	struct net_device *dev = netdev_notifier_info_to_dev(ptr);
 	struct wireless_dev *wdev = dev->ieee80211_ptr;
 	struct cfg80211_registered_device *rdev;
+	struct cfg80211_sched_scan_request *sched_scan_req;
 
 	if (!wdev)
 		return NOTIFY_DONE;
@@ -1007,8 +1043,9 @@ static int cfg80211_netdev_notifier_call(struct notifier_block *nb,
 			___cfg80211_scan_done(rdev, false);
 		}
 
-		if (WARN_ON(rdev->sched_scan_req &&
-			    rdev->sched_scan_req->dev == wdev->netdev)) {
+		sched_scan_req = rtnl_dereference(rdev->sched_scan_req);
+		if (WARN_ON(sched_scan_req &&
+			    sched_scan_req->dev == wdev->netdev)) {
 			__cfg80211_stop_sched_scan(rdev, false);
 		}
 
@@ -1171,6 +1208,7 @@ out_fail_wq:
 	regulatory_exit();
 out_fail_reg:
 	debugfs_remove(ieee80211_debugfs_dir);
+	nl80211_exit();
 out_fail_nl80211:
 	unregister_netdevice_notifier(&cfg80211_netdev_notifier);
 out_fail_notifier:

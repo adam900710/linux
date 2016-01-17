@@ -1184,10 +1184,11 @@ out:
 	if (prot == MLX4_PROT_ETH) {
 		/* manage the steering entry for promisc mode */
 		if (new_entry)
-			new_steering_entry(dev, port, steer, index, qp->qpn);
+			err = new_steering_entry(dev, port, steer,
+						 index, qp->qpn);
 		else
-			existing_steering_entry(dev, port, steer,
-						index, qp->qpn);
+			err = existing_steering_entry(dev, port, steer,
+						      index, qp->qpn);
 	}
 	if (err && link && index != -1) {
 		if (index < dev->caps.num_mgms)
@@ -1318,6 +1319,9 @@ out:
 	mutex_unlock(&priv->mcg_table.mutex);
 
 	mlx4_free_cmd_mailbox(dev, mailbox);
+	if (err && dev->persist->state & MLX4_DEVICE_STATE_INTERNAL_ERROR)
+		/* In case device is under an error, return success as a closing command */
+		err = 0;
 	return err;
 }
 
@@ -1347,6 +1351,9 @@ static int mlx4_QP_ATTACH(struct mlx4_dev *dev, struct mlx4_qp *qp,
 		       MLX4_CMD_WRAPPED);
 
 	mlx4_free_cmd_mailbox(dev, mailbox);
+	if (err && !attach &&
+	    dev->persist->state & MLX4_DEVICE_STATE_INTERNAL_ERROR)
+		err = 0;
 	return err;
 }
 

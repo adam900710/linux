@@ -155,18 +155,19 @@ struct sgtl5000_priv {
 static int mic_bias_event(struct snd_soc_dapm_widget *w,
 	struct snd_kcontrol *kcontrol, int event)
 {
-	struct sgtl5000_priv *sgtl5000 = snd_soc_codec_get_drvdata(w->codec);
+	struct snd_soc_codec *codec = snd_soc_dapm_to_codec(w->dapm);
+	struct sgtl5000_priv *sgtl5000 = snd_soc_codec_get_drvdata(codec);
 
 	switch (event) {
 	case SND_SOC_DAPM_POST_PMU:
 		/* change mic bias resistor */
-		snd_soc_update_bits(w->codec, SGTL5000_CHIP_MIC_CTRL,
+		snd_soc_update_bits(codec, SGTL5000_CHIP_MIC_CTRL,
 			SGTL5000_BIAS_R_MASK,
 			sgtl5000->micbias_resistor << SGTL5000_BIAS_R_SHIFT);
 		break;
 
 	case SND_SOC_DAPM_PRE_PMD:
-		snd_soc_update_bits(w->codec, SGTL5000_CHIP_MIC_CTRL,
+		snd_soc_update_bits(codec, SGTL5000_CHIP_MIC_CTRL,
 				SGTL5000_BIAS_R_MASK, 0);
 		break;
 	}
@@ -181,11 +182,12 @@ static int mic_bias_event(struct snd_soc_dapm_widget *w,
 static int power_vag_event(struct snd_soc_dapm_widget *w,
 	struct snd_kcontrol *kcontrol, int event)
 {
+	struct snd_soc_codec *codec = snd_soc_dapm_to_codec(w->dapm);
 	const u32 mask = SGTL5000_DAC_POWERUP | SGTL5000_ADC_POWERUP;
 
 	switch (event) {
 	case SND_SOC_DAPM_POST_PMU:
-		snd_soc_update_bits(w->codec, SGTL5000_CHIP_ANA_POWER,
+		snd_soc_update_bits(codec, SGTL5000_CHIP_ANA_POWER,
 			SGTL5000_VAG_POWERUP, SGTL5000_VAG_POWERUP);
 		break;
 
@@ -195,9 +197,9 @@ static int power_vag_event(struct snd_soc_dapm_widget *w,
 		 * operational to prevent inadvertently starving the
 		 * other one of them.
 		 */
-		if ((snd_soc_read(w->codec, SGTL5000_CHIP_ANA_POWER) &
+		if ((snd_soc_read(codec, SGTL5000_CHIP_ANA_POWER) &
 				mask) != mask) {
-			snd_soc_update_bits(w->codec, SGTL5000_CHIP_ANA_POWER,
+			snd_soc_update_bits(codec, SGTL5000_CHIP_ANA_POWER,
 				SGTL5000_VAG_POWERUP, 0);
 			msleep(400);
 		}
@@ -404,11 +406,10 @@ static int dac_put_volsw(struct snd_kcontrol *kcontrol,
 static const DECLARE_TLV_DB_SCALE(capture_6db_attenuate, -600, 600, 0);
 
 /* tlv for mic gain, 0db 20db 30db 40db */
-static const unsigned int mic_gain_tlv[] = {
-	TLV_DB_RANGE_HEAD(2),
+static const DECLARE_TLV_DB_RANGE(mic_gain_tlv,
 	0, 0, TLV_DB_SCALE_ITEM(0, 0, 0),
-	1, 3, TLV_DB_SCALE_ITEM(2000, 1000, 0),
-};
+	1, 3, TLV_DB_SCALE_ITEM(2000, 1000, 0)
+);
 
 /* tlv for hp volume, -51.5db to 12.0db, step .5db */
 static const DECLARE_TLV_DB_SCALE(headphone_volume, -5150, 50, 0);
@@ -483,21 +484,21 @@ static int sgtl5000_set_dai_fmt(struct snd_soc_dai *codec_dai, unsigned int fmt)
 	/* setting i2s data format */
 	switch (fmt & SND_SOC_DAIFMT_FORMAT_MASK) {
 	case SND_SOC_DAIFMT_DSP_A:
-		i2sctl |= SGTL5000_I2S_MODE_PCM;
+		i2sctl |= SGTL5000_I2S_MODE_PCM << SGTL5000_I2S_MODE_SHIFT;
 		break;
 	case SND_SOC_DAIFMT_DSP_B:
-		i2sctl |= SGTL5000_I2S_MODE_PCM;
+		i2sctl |= SGTL5000_I2S_MODE_PCM << SGTL5000_I2S_MODE_SHIFT;
 		i2sctl |= SGTL5000_I2S_LRALIGN;
 		break;
 	case SND_SOC_DAIFMT_I2S:
-		i2sctl |= SGTL5000_I2S_MODE_I2S_LJ;
+		i2sctl |= SGTL5000_I2S_MODE_I2S_LJ << SGTL5000_I2S_MODE_SHIFT;
 		break;
 	case SND_SOC_DAIFMT_RIGHT_J:
-		i2sctl |= SGTL5000_I2S_MODE_RJ;
+		i2sctl |= SGTL5000_I2S_MODE_RJ << SGTL5000_I2S_MODE_SHIFT;
 		i2sctl |= SGTL5000_I2S_LRPOL;
 		break;
 	case SND_SOC_DAIFMT_LEFT_J:
-		i2sctl |= SGTL5000_I2S_MODE_I2S_LJ;
+		i2sctl |= SGTL5000_I2S_MODE_I2S_LJ << SGTL5000_I2S_MODE_SHIFT;
 		i2sctl |= SGTL5000_I2S_LRALIGN;
 		break;
 	default:
@@ -946,7 +947,7 @@ static int sgtl5000_set_bias_level(struct snd_soc_codec *codec,
 	case SND_SOC_BIAS_PREPARE:
 		break;
 	case SND_SOC_BIAS_STANDBY:
-		if (codec->dapm.bias_level == SND_SOC_BIAS_OFF) {
+		if (snd_soc_codec_get_bias_level(codec) == SND_SOC_BIAS_OFF) {
 			ret = regulator_bulk_enable(
 						ARRAY_SIZE(sgtl5000->supplies),
 						sgtl5000->supplies);
@@ -977,7 +978,6 @@ static int sgtl5000_set_bias_level(struct snd_soc_codec *codec,
 		break;
 	}
 
-	codec->dapm.bias_level = level;
 	return 0;
 }
 
@@ -1090,6 +1090,19 @@ static bool sgtl5000_readable(struct device *dev, unsigned int reg)
 }
 
 /*
+ * This precalculated table contains all (vag_val * 100 / lo_calcntrl) results
+ * to select an appropriate lo_vol_* in SGTL5000_CHIP_LINE_OUT_VOL
+ * The calculatation was done for all possible register values which
+ * is the array index and the following formula: 10^((idx−15)/40) * 100
+ */
+static const u8 vol_quot_table[] = {
+	42, 45, 47, 50, 53, 56, 60, 63,
+	67, 71, 75, 79, 84, 89, 94, 100,
+	106, 112, 119, 126, 133, 141, 150, 158,
+	168, 178, 188, 200, 211, 224, 237, 251
+};
+
+/*
  * sgtl5000 has 3 internal power supplies:
  * 1. VAG, normally set to vdda/2
  * 2. charge pump, set to different value
@@ -1109,6 +1122,10 @@ static int sgtl5000_set_power_regs(struct snd_soc_codec *codec)
 	u16 ana_pwr;
 	u16 lreg_ctrl;
 	int vag;
+	int lo_vag;
+	int vol_quot;
+	int lo_vol;
+	size_t i;
 	struct sgtl5000_priv *sgtl5000 = snd_soc_codec_get_drvdata(codec);
 
 	vdda  = regulator_get_voltage(sgtl5000->supplies[VDDA].consumer);
@@ -1149,13 +1166,7 @@ static int sgtl5000_set_power_regs(struct snd_soc_codec *codec)
 		/* Enable VDDC charge pump */
 		ana_pwr |= SGTL5000_VDDC_CHRGPMP_POWERUP;
 	} else if (vddio >= 3100 && vdda >= 3100) {
-		/*
-		 * if vddio and vddd > 3.1v,
-		 * charge pump should be clean before set ana_pwr
-		 */
-		snd_soc_update_bits(codec, SGTL5000_CHIP_ANA_POWER,
-				SGTL5000_VDDC_CHRGPMP_POWERUP, 0);
-
+		ana_pwr &= ~SGTL5000_VDDC_CHRGPMP_POWERUP;
 		/* VDDC use VDDIO rail */
 		lreg_ctrl |= SGTL5000_VDDC_ASSN_OVRD;
 		lreg_ctrl |= SGTL5000_VDDC_MAN_ASSN_VDDIO <<
@@ -1202,22 +1213,44 @@ static int sgtl5000_set_power_regs(struct snd_soc_codec *codec)
 			SGTL5000_ANA_GND_MASK, vag << SGTL5000_ANA_GND_SHIFT);
 
 	/* set line out VAG to vddio / 2, in range (0.8v, 1.675v) */
-	vag = vddio / 2;
-	if (vag <= SGTL5000_LINE_OUT_GND_BASE)
-		vag = 0;
-	else if (vag >= SGTL5000_LINE_OUT_GND_BASE +
+	lo_vag = vddio / 2;
+	if (lo_vag <= SGTL5000_LINE_OUT_GND_BASE)
+		lo_vag = 0;
+	else if (lo_vag >= SGTL5000_LINE_OUT_GND_BASE +
 		SGTL5000_LINE_OUT_GND_STP * SGTL5000_LINE_OUT_GND_MAX)
-		vag = SGTL5000_LINE_OUT_GND_MAX;
+		lo_vag = SGTL5000_LINE_OUT_GND_MAX;
 	else
-		vag = (vag - SGTL5000_LINE_OUT_GND_BASE) /
+		lo_vag = (lo_vag - SGTL5000_LINE_OUT_GND_BASE) /
 		    SGTL5000_LINE_OUT_GND_STP;
 
 	snd_soc_update_bits(codec, SGTL5000_CHIP_LINE_OUT_CTRL,
 			SGTL5000_LINE_OUT_CURRENT_MASK |
 			SGTL5000_LINE_OUT_GND_MASK,
-			vag << SGTL5000_LINE_OUT_GND_SHIFT |
+			lo_vag << SGTL5000_LINE_OUT_GND_SHIFT |
 			SGTL5000_LINE_OUT_CURRENT_360u <<
 				SGTL5000_LINE_OUT_CURRENT_SHIFT);
+
+	/*
+	 * Set lineout output level in range (0..31)
+	 * the same value is used for right and left channel
+	 *
+	 * Searching for a suitable index solving this formula:
+	 * idx = 40 * log10(vag_val / lo_cagcntrl) + 15
+	 */
+	vol_quot = (vag * 100) / lo_vag;
+	lo_vol = 0;
+	for (i = 0; i < ARRAY_SIZE(vol_quot_table); i++) {
+		if (vol_quot >= vol_quot_table[i])
+			lo_vol = i;
+		else
+			break;
+	}
+
+	snd_soc_update_bits(codec, SGTL5000_CHIP_LINE_OUT_VOL,
+		SGTL5000_LINE_OUT_VOL_RIGHT_MASK |
+		SGTL5000_LINE_OUT_VOL_LEFT_MASK,
+		lo_vol << SGTL5000_LINE_OUT_VOL_RIGHT_SHIFT |
+		lo_vol << SGTL5000_LINE_OUT_VOL_LEFT_SHIFT);
 
 	return 0;
 }
@@ -1343,8 +1376,8 @@ static int sgtl5000_probe(struct snd_soc_codec *codec)
 			sgtl5000->micbias_resistor << SGTL5000_BIAS_R_SHIFT);
 
 	snd_soc_update_bits(codec, SGTL5000_CHIP_MIC_CTRL,
-			SGTL5000_BIAS_R_MASK,
-			sgtl5000->micbias_voltage << SGTL5000_BIAS_R_SHIFT);
+			SGTL5000_BIAS_VOLT_MASK,
+			sgtl5000->micbias_voltage << SGTL5000_BIAS_VOLT_SHIFT);
 	/*
 	 * disable DAP
 	 * TODO:
@@ -1462,6 +1495,9 @@ static int sgtl5000_i2c_probe(struct i2c_client *client,
 	if (ret)
 		return ret;
 
+	/* Need 8 clocks before I2C accesses */
+	udelay(1);
+
 	/* read chip information */
 	ret = regmap_read(sgtl5000->regmap, SGTL5000_CHIP_ID, &reg);
 	if (ret)
@@ -1513,7 +1549,7 @@ static int sgtl5000_i2c_probe(struct i2c_client *client,
 			else {
 				sgtl5000->micbias_voltage = 0;
 				dev_err(&client->dev,
-					"Unsuitable MicBias resistor\n");
+					"Unsuitable MicBias voltage\n");
 			}
 		} else {
 			sgtl5000->micbias_voltage = 0;
@@ -1564,7 +1600,6 @@ MODULE_DEVICE_TABLE(of, sgtl5000_dt_ids);
 static struct i2c_driver sgtl5000_i2c_driver = {
 	.driver = {
 		   .name = "sgtl5000",
-		   .owner = THIS_MODULE,
 		   .of_match_table = sgtl5000_dt_ids,
 		   },
 	.probe = sgtl5000_i2c_probe,

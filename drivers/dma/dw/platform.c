@@ -26,6 +26,8 @@
 
 #include "internal.h"
 
+#define DRV_NAME	"dw_dmac"
+
 static struct dma_chan *dw_dma_of_xlate(struct of_phandle_args *dma_spec,
 					struct of_dma *ofdma)
 {
@@ -100,7 +102,7 @@ dw_dma_parse_dt(struct platform_device *pdev)
 {
 	struct device_node *np = pdev->dev.of_node;
 	struct dw_dma_platform_data *pdata;
-	u32 tmp, arr[4];
+	u32 tmp, arr[DW_DMA_MAX_NR_MASTERS];
 
 	if (!np) {
 		dev_err(&pdev->dev, "Missing DT data\n");
@@ -127,7 +129,7 @@ dw_dma_parse_dt(struct platform_device *pdev)
 		pdata->block_size = tmp;
 
 	if (!of_property_read_u32(np, "dma-masters", &tmp)) {
-		if (tmp > 4)
+		if (tmp > DW_DMA_MAX_NR_MASTERS)
 			return NULL;
 
 		pdata->nr_masters = tmp;
@@ -153,6 +155,7 @@ static int dw_probe(struct platform_device *pdev)
 	struct dw_dma_chip *chip;
 	struct device *dev = &pdev->dev;
 	struct resource *mem;
+	const struct acpi_device_id *id;
 	struct dw_dma_platform_data *pdata;
 	int err;
 
@@ -176,6 +179,11 @@ static int dw_probe(struct platform_device *pdev)
 	pdata = dev_get_platdata(dev);
 	if (!pdata)
 		pdata = dw_dma_parse_dt(pdev);
+	if (!pdata && has_acpi_companion(dev)) {
+		id = acpi_match_device(dev->driver->acpi_match_table, dev);
+		if (id)
+			pdata = (struct dw_dma_platform_data *)id->driver_data;
+	}
 
 	chip->dev = dev;
 
@@ -244,8 +252,17 @@ MODULE_DEVICE_TABLE(of, dw_dma_of_id_table);
 #endif
 
 #ifdef CONFIG_ACPI
+static struct dw_dma_platform_data dw_dma_acpi_pdata = {
+	.nr_channels = 8,
+	.is_private = true,
+	.chan_allocation_order = CHAN_ALLOCATION_ASCENDING,
+	.chan_priority = CHAN_PRIORITY_ASCENDING,
+	.block_size = 4095,
+	.nr_masters = 2,
+};
+
 static const struct acpi_device_id dw_dma_acpi_id_table[] = {
-	{ "INTL9C60", 0 },
+	{ "INTL9C60", (kernel_ulong_t)&dw_dma_acpi_pdata },
 	{ }
 };
 MODULE_DEVICE_TABLE(acpi, dw_dma_acpi_id_table);
@@ -284,7 +301,7 @@ static struct platform_driver dw_driver = {
 	.remove		= dw_remove,
 	.shutdown       = dw_shutdown,
 	.driver = {
-		.name	= "dw_dmac",
+		.name	= DRV_NAME,
 		.pm	= &dw_dev_pm_ops,
 		.of_match_table = of_match_ptr(dw_dma_of_id_table),
 		.acpi_match_table = ACPI_PTR(dw_dma_acpi_id_table),
@@ -305,3 +322,4 @@ module_exit(dw_exit);
 
 MODULE_LICENSE("GPL v2");
 MODULE_DESCRIPTION("Synopsys DesignWare DMA Controller platform driver");
+MODULE_ALIAS("platform:" DRV_NAME);

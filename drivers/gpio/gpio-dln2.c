@@ -396,6 +396,7 @@ static void dln2_gpio_event(struct platform_device *pdev, u16 echo,
 			    const void *data, int len)
 {
 	int pin, irq;
+
 	const struct {
 		__le16 count;
 		__u8 type;
@@ -465,7 +466,6 @@ static int dln2_gpio_probe(struct platform_device *pdev)
 	dln2->gpio.owner = THIS_MODULE;
 	dln2->gpio.base = -1;
 	dln2->gpio.ngpio = pins;
-	dln2->gpio.exported = true;
 	dln2->gpio.can_sleep = true;
 	dln2->gpio.irq_not_threaded = true;
 	dln2->gpio.set = dln2_gpio_set;

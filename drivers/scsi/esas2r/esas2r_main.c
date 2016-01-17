@@ -256,7 +256,6 @@ static struct scsi_host_template driver_template = {
 	.proc_name			= ESAS2R_DRVR_NAME,
 	.change_queue_depth		= scsi_change_queue_depth,
 	.max_sectors			= 0xFFFF,
-	.use_blk_tags			= 1,
 };
 
 int sgl_page_size = 512;
@@ -749,7 +748,7 @@ int esas2r_show_info(struct seq_file *m, struct Scsi_Host *sh)
 	if (dev_count == 0)
 		seq_puts(m, "none\n");
 
-	seq_puts(m, "\n");
+	seq_putc(m, '\n');
 	return 0;
 
 }

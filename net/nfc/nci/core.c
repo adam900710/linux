@@ -28,6 +28,7 @@
 #define pr_fmt(fmt) KBUILD_MODNAME ": %s: " fmt, __func__
 
 #include <linux/module.h>
+#include <linux/kernel.h>
 #include <linux/types.h>
 #include <linux/workqueue.h>
 #include <linux/completion.h>
@@ -41,9 +42,40 @@
 #include <net/nfc/nci_core.h>
 #include <linux/nfc.h>
 
+struct core_conn_create_data {
+	int length;
+	struct nci_core_conn_create_cmd *cmd;
+};
+
 static void nci_cmd_work(struct work_struct *work);
 static void nci_rx_work(struct work_struct *work);
 static void nci_tx_work(struct work_struct *work);
+
+struct nci_conn_info *nci_get_conn_info_by_conn_id(struct nci_dev *ndev,
+						   int conn_id)
+{
+	struct nci_conn_info *conn_info;
+
+	list_for_each_entry(conn_info, &ndev->conn_info_list, list) {
+		if (conn_info->conn_id == conn_id)
+			return conn_info;
+	}
+
+	return NULL;
+}
+
+int nci_get_conn_info_by_id(struct nci_dev *ndev, u8 id)
+{
+	struct nci_conn_info *conn_info;
+
+	list_for_each_entry(conn_info, &ndev->conn_info_list, list) {
+		if (conn_info->id == id)
+			return conn_info->conn_id;
+	}
+
+	return -EINVAL;
+}
+EXPORT_SYMBOL(nci_get_conn_info_by_id);
 
 /* ---- NCI requests ---- */
 
@@ -55,6 +87,7 @@ void nci_req_complete(struct nci_dev *ndev, int result)
 		complete(&ndev->req_completion);
 	}
 }
+EXPORT_SYMBOL(nci_req_complete);
 
 static void nci_req_cancel(struct nci_dev *ndev, int err)
 {
@@ -109,10 +142,10 @@ static int __nci_request(struct nci_dev *ndev,
 	return rc;
 }
 
-static inline int nci_request(struct nci_dev *ndev,
-			      void (*req)(struct nci_dev *ndev,
-					  unsigned long opt),
-			      unsigned long opt, __u32 timeout)
+inline int nci_request(struct nci_dev *ndev,
+		       void (*req)(struct nci_dev *ndev,
+				   unsigned long opt),
+		       unsigned long opt, __u32 timeout)
 {
 	int rc;
 
@@ -305,6 +338,60 @@ static void nci_rf_deactivate_req(struct nci_dev *ndev, unsigned long opt)
 		     sizeof(struct nci_rf_deactivate_cmd), &cmd);
 }
 
+struct nci_cmd_param {
+	__u16 opcode;
+	size_t len;
+	__u8 *payload;
+};
+
+static void nci_generic_req(struct nci_dev *ndev, unsigned long opt)
+{
+	struct nci_cmd_param *param =
+		(struct nci_cmd_param *)opt;
+
+	nci_send_cmd(ndev, param->opcode, param->len, param->payload);
+}
+
+int nci_prop_cmd(struct nci_dev *ndev, __u8 oid, size_t len, __u8 *payload)
+{
+	struct nci_cmd_param param;
+
+	param.opcode = nci_opcode_pack(NCI_GID_PROPRIETARY, oid);
+	param.len = len;
+	param.payload = payload;
+
+	return __nci_request(ndev, nci_generic_req, (unsigned long)&param,
+			     msecs_to_jiffies(NCI_CMD_TIMEOUT));
+}
+EXPORT_SYMBOL(nci_prop_cmd);
+
+int nci_core_cmd(struct nci_dev *ndev, __u16 opcode, size_t len, __u8 *payload)
+{
+	struct nci_cmd_param param;
+
+	param.opcode = opcode;
+	param.len = len;
+	param.payload = payload;
+
+	return __nci_request(ndev, nci_generic_req, (unsigned long)&param,
+			     msecs_to_jiffies(NCI_CMD_TIMEOUT));
+}
+EXPORT_SYMBOL(nci_core_cmd);
+
+int nci_core_reset(struct nci_dev *ndev)
+{
+	return __nci_request(ndev, nci_reset_req, 0,
+			     msecs_to_jiffies(NCI_RESET_TIMEOUT));
+}
+EXPORT_SYMBOL(nci_core_reset);
+
+int nci_core_init(struct nci_dev *ndev)
+{
+	return __nci_request(ndev, nci_init_req, 0,
+			     msecs_to_jiffies(NCI_INIT_TIMEOUT));
+}
+EXPORT_SYMBOL(nci_core_init);
+
 static int nci_open_device(struct nci_dev *ndev)
 {
 	int rc = 0;
@@ -325,16 +412,25 @@ static int nci_open_device(struct nci_dev *ndev)
 
 	set_bit(NCI_INIT, &ndev->flags);
 
-	rc = __nci_request(ndev, nci_reset_req, 0,
-			   msecs_to_jiffies(NCI_RESET_TIMEOUT));
+	if (ndev->ops->init)
+		rc = ndev->ops->init(ndev);
 
-	if (ndev->ops->setup)
-		ndev->ops->setup(ndev);
+	if (!rc) {
+		rc = __nci_request(ndev, nci_reset_req, 0,
+				   msecs_to_jiffies(NCI_RESET_TIMEOUT));
+	}
+
+	if (!rc && ndev->ops->setup) {
+		rc = ndev->ops->setup(ndev);
+	}
 
 	if (!rc) {
 		rc = __nci_request(ndev, nci_init_req, 0,
 				   msecs_to_jiffies(NCI_INIT_TIMEOUT));
 	}
+
+	if (!rc && ndev->ops->post_setup)
+		rc = ndev->ops->post_setup(ndev);
 
 	if (!rc) {
 		rc = __nci_request(ndev, nci_init_complete_req, 0,
@@ -389,16 +485,18 @@ static int nci_close_device(struct nci_dev *ndev)
 	set_bit(NCI_INIT, &ndev->flags);
 	__nci_request(ndev, nci_reset_req, 0,
 		      msecs_to_jiffies(NCI_RESET_TIMEOUT));
+
+	/* After this point our queues are empty
+	 * and no works are scheduled.
+	 */
+	ndev->ops->close(ndev);
+
 	clear_bit(NCI_INIT, &ndev->flags);
 
 	del_timer_sync(&ndev->cmd_timer);
 
 	/* Flush cmd wq */
 	flush_workqueue(ndev->cmd_wq);
-
-	/* After this point our queues are empty
-	 * and no works are scheduled. */
-	ndev->ops->close(ndev);
 
 	/* Clear flags */
 	ndev->flags = 0;
@@ -455,6 +553,103 @@ int nci_set_config(struct nci_dev *ndev, __u8 id, size_t len, __u8 *val)
 			     msecs_to_jiffies(NCI_SET_CONFIG_TIMEOUT));
 }
 EXPORT_SYMBOL(nci_set_config);
+
+static void nci_nfcee_discover_req(struct nci_dev *ndev, unsigned long opt)
+{
+	struct nci_nfcee_discover_cmd cmd;
+	__u8 action = opt;
+
+	cmd.discovery_action = action;
+
+	nci_send_cmd(ndev, NCI_OP_NFCEE_DISCOVER_CMD, 1, &cmd);
+}
+
+int nci_nfcee_discover(struct nci_dev *ndev, u8 action)
+{
+	return __nci_request(ndev, nci_nfcee_discover_req, action,
+				msecs_to_jiffies(NCI_CMD_TIMEOUT));
+}
+EXPORT_SYMBOL(nci_nfcee_discover);
+
+static void nci_nfcee_mode_set_req(struct nci_dev *ndev, unsigned long opt)
+{
+	struct nci_nfcee_mode_set_cmd *cmd =
+					(struct nci_nfcee_mode_set_cmd *)opt;
+
+	nci_send_cmd(ndev, NCI_OP_NFCEE_MODE_SET_CMD,
+		     sizeof(struct nci_nfcee_mode_set_cmd), cmd);
+}
+
+int nci_nfcee_mode_set(struct nci_dev *ndev, u8 nfcee_id, u8 nfcee_mode)
+{
+	struct nci_nfcee_mode_set_cmd cmd;
+
+	cmd.nfcee_id = nfcee_id;
+	cmd.nfcee_mode = nfcee_mode;
+
+	return __nci_request(ndev, nci_nfcee_mode_set_req,
+			     (unsigned long)&cmd,
+			     msecs_to_jiffies(NCI_CMD_TIMEOUT));
+}
+EXPORT_SYMBOL(nci_nfcee_mode_set);
+
+static void nci_core_conn_create_req(struct nci_dev *ndev, unsigned long opt)
+{
+	struct core_conn_create_data *data =
+					(struct core_conn_create_data *)opt;
+
+	nci_send_cmd(ndev, NCI_OP_CORE_CONN_CREATE_CMD, data->length, data->cmd);
+}
+
+int nci_core_conn_create(struct nci_dev *ndev, u8 destination_type,
+			 u8 number_destination_params,
+			 size_t params_len,
+			 struct core_conn_create_dest_spec_params *params)
+{
+	int r;
+	struct nci_core_conn_create_cmd *cmd;
+	struct core_conn_create_data data;
+
+	data.length = params_len + sizeof(struct nci_core_conn_create_cmd);
+	cmd = kzalloc(data.length, GFP_KERNEL);
+	if (!cmd)
+		return -ENOMEM;
+
+	if (!number_destination_params)
+		return -EINVAL;
+
+	cmd->destination_type = destination_type;
+	cmd->number_destination_params = number_destination_params;
+	memcpy(cmd->params, params, params_len);
+
+	data.cmd = cmd;
+
+	if (params->length > 0)
+		ndev->cur_id = params->value[DEST_SPEC_PARAMS_ID_INDEX];
+	else
+		ndev->cur_id = 0;
+
+	r = __nci_request(ndev, nci_core_conn_create_req,
+			  (unsigned long)&data,
+			  msecs_to_jiffies(NCI_CMD_TIMEOUT));
+	kfree(cmd);
+	return r;
+}
+EXPORT_SYMBOL(nci_core_conn_create);
+
+static void nci_core_conn_close_req(struct nci_dev *ndev, unsigned long opt)
+{
+	__u8 conn_id = opt;
+
+	nci_send_cmd(ndev, NCI_OP_CORE_CONN_CLOSE_CMD, 1, &conn_id);
+}
+
+int nci_core_conn_close(struct nci_dev *ndev, u8 conn_id)
+{
+	return __nci_request(ndev, nci_core_conn_close_req, conn_id,
+			     msecs_to_jiffies(NCI_CMD_TIMEOUT));
+}
+EXPORT_SYMBOL(nci_core_conn_close);
 
 static int nci_set_local_general_bytes(struct nfc_dev *nfc_dev)
 {
@@ -640,9 +835,11 @@ static int nci_activate_target(struct nfc_dev *nfc_dev,
 }
 
 static void nci_deactivate_target(struct nfc_dev *nfc_dev,
-				  struct nfc_target *target)
+				  struct nfc_target *target,
+				  __u8 mode)
 {
 	struct nci_dev *ndev = nfc_get_drvdata(nfc_dev);
+	u8 nci_mode = NCI_DEACTIVATE_TYPE_IDLE_MODE;
 
 	pr_debug("entry\n");
 
@@ -653,9 +850,14 @@ static void nci_deactivate_target(struct nfc_dev *nfc_dev,
 
 	ndev->target_active_prot = 0;
 
+	switch (mode) {
+	case NFC_TARGET_MODE_SLEEP:
+		nci_mode = NCI_DEACTIVATE_TYPE_SLEEP_MODE;
+		break;
+	}
+
 	if (atomic_read(&ndev->state) == NCI_POLL_ACTIVE) {
-		nci_request(ndev, nci_rf_deactivate_req,
-			    NCI_DEACTIVATE_TYPE_SLEEP_MODE,
+		nci_request(ndev, nci_rf_deactivate_req, nci_mode,
 			    msecs_to_jiffies(NCI_RF_DEACTIVATE_TIMEOUT));
 	}
 }
@@ -689,7 +891,7 @@ static int nci_dep_link_down(struct nfc_dev *nfc_dev)
 	pr_debug("entry\n");
 
 	if (nfc_dev->rf_mode == NFC_RF_INITIATOR) {
-		nci_deactivate_target(nfc_dev, NULL);
+		nci_deactivate_target(nfc_dev, NULL, NCI_DEACTIVATE_TYPE_IDLE_MODE);
 	} else {
 		if (atomic_read(&ndev->state) == NCI_LISTEN_ACTIVE ||
 		    atomic_read(&ndev->state) == NCI_DISCOVERY) {
@@ -712,6 +914,11 @@ static int nci_transceive(struct nfc_dev *nfc_dev, struct nfc_target *target,
 {
 	struct nci_dev *ndev = nfc_get_drvdata(nfc_dev);
 	int rc;
+	struct nci_conn_info    *conn_info;
+
+	conn_info = ndev->rf_conn_info;
+	if (!conn_info)
+		return -EPROTO;
 
 	pr_debug("target_idx %d, len %d\n", target->idx, skb->len);
 
@@ -724,8 +931,8 @@ static int nci_transceive(struct nfc_dev *nfc_dev, struct nfc_target *target,
 		return -EBUSY;
 
 	/* store cb and context to be used on receiving data */
-	ndev->data_exchange_cb = cb;
-	ndev->data_exchange_cb_context = cb_context;
+	conn_info->data_exchange_cb = cb;
+	conn_info->data_exchange_cb_context = cb_context;
 
 	rc = nci_send_data(ndev, NCI_STATIC_RF_CONN_ID, skb);
 	if (rc)
@@ -768,10 +975,16 @@ static int nci_disable_se(struct nfc_dev *nfc_dev, u32 se_idx)
 
 static int nci_discover_se(struct nfc_dev *nfc_dev)
 {
+	int r;
 	struct nci_dev *ndev = nfc_get_drvdata(nfc_dev);
 
-	if (ndev->ops->discover_se)
+	if (ndev->ops->discover_se) {
+		r = nci_nfcee_discover(ndev, NCI_NFCEE_DISCOVERY_ACTION_ENABLE);
+		if (r != NCI_STATUS_OK)
+			return -EPROTO;
+
 		return ndev->ops->discover_se(ndev);
+	}
 
 	return 0;
 }
@@ -789,6 +1002,16 @@ static int nci_se_io(struct nfc_dev *nfc_dev, u32 se_idx,
 	return 0;
 }
 
+static int nci_fw_download(struct nfc_dev *nfc_dev, const char *firmware_name)
+{
+	struct nci_dev *ndev = nfc_get_drvdata(nfc_dev);
+
+	if (!ndev->ops->fw_download)
+		return -ENOTSUPP;
+
+	return ndev->ops->fw_download(ndev, firmware_name);
+}
+
 static struct nfc_ops nci_nfc_ops = {
 	.dev_up = nci_dev_up,
 	.dev_down = nci_dev_down,
@@ -804,10 +1027,10 @@ static struct nfc_ops nci_nfc_ops = {
 	.disable_se = nci_disable_se,
 	.discover_se = nci_discover_se,
 	.se_io = nci_se_io,
+	.fw_download = nci_fw_download,
 };
 
 /* ---- Interface to NCI drivers ---- */
-
 /**
  * nci_allocate_device - allocate a new nci device
  *
@@ -833,6 +1056,14 @@ struct nci_dev *nci_allocate_device(struct nci_ops *ops,
 		return NULL;
 
 	ndev->ops = ops;
+
+	if (ops->n_prop_ops > NCI_MAX_PROPRIETARY_CMD) {
+		pr_err("Too many proprietary commands: %zd\n",
+		       ops->n_prop_ops);
+		ops->prop_ops = NULL;
+		ops->n_prop_ops = 0;
+	}
+
 	ndev->tx_headroom = tx_headroom;
 	ndev->tx_tailroom = tx_tailroom;
 	init_completion(&ndev->req_completion);
@@ -842,13 +1073,20 @@ struct nci_dev *nci_allocate_device(struct nci_ops *ops,
 					    tx_headroom + NCI_DATA_HDR_SIZE,
 					    tx_tailroom);
 	if (!ndev->nfc_dev)
-		goto free_exit;
+		goto free_nci;
+
+	ndev->hci_dev = nci_hci_allocate(ndev);
+	if (!ndev->hci_dev)
+		goto free_nfc;
 
 	nfc_set_drvdata(ndev->nfc_dev, ndev);
 
 	return ndev;
 
-free_exit:
+free_nfc:
+	kfree(ndev->nfc_dev);
+
+free_nci:
 	kfree(ndev);
 	return NULL;
 }
@@ -913,6 +1151,7 @@ int nci_register_device(struct nci_dev *ndev)
 		    (unsigned long) ndev);
 
 	mutex_init(&ndev->req_lock);
+	INIT_LIST_HEAD(&ndev->conn_info_list);
 
 	rc = nfc_register_device(ndev->nfc_dev);
 	if (rc)
@@ -938,11 +1177,18 @@ EXPORT_SYMBOL(nci_register_device);
  */
 void nci_unregister_device(struct nci_dev *ndev)
 {
+	struct nci_conn_info    *conn_info, *n;
+
 	nci_close_device(ndev);
 
 	destroy_workqueue(ndev->cmd_wq);
 	destroy_workqueue(ndev->rx_wq);
 	destroy_workqueue(ndev->tx_wq);
+
+	list_for_each_entry_safe(conn_info, n, &ndev->conn_info_list, list) {
+		list_del(&conn_info->list);
+		/* conn_info is allocated with devm_kzalloc */
+	}
 
 	nfc_unregister_device(ndev->nfc_dev);
 }
@@ -972,7 +1218,7 @@ int nci_recv_frame(struct nci_dev *ndev, struct sk_buff *skb)
 }
 EXPORT_SYMBOL(nci_recv_frame);
 
-static int nci_send_frame(struct nci_dev *ndev, struct sk_buff *skb)
+int nci_send_frame(struct nci_dev *ndev, struct sk_buff *skb)
 {
 	pr_debug("len %d\n", skb->len);
 
@@ -990,6 +1236,7 @@ static int nci_send_frame(struct nci_dev *ndev, struct sk_buff *skb)
 
 	return ndev->ops->send(ndev, skb);
 }
+EXPORT_SYMBOL(nci_send_frame);
 
 /* Send NCI command */
 int nci_send_cmd(struct nci_dev *ndev, __u16 opcode, __u8 plen, void *payload)
@@ -1021,26 +1268,106 @@ int nci_send_cmd(struct nci_dev *ndev, __u16 opcode, __u8 plen, void *payload)
 
 	return 0;
 }
+EXPORT_SYMBOL(nci_send_cmd);
+
+/* Proprietary commands API */
+static struct nci_driver_ops *ops_cmd_lookup(struct nci_driver_ops *ops,
+					     size_t n_ops,
+					     __u16 opcode)
+{
+	size_t i;
+	struct nci_driver_ops *op;
+
+	if (!ops || !n_ops)
+		return NULL;
+
+	for (i = 0; i < n_ops; i++) {
+		op = &ops[i];
+		if (op->opcode == opcode)
+			return op;
+	}
+
+	return NULL;
+}
+
+static int nci_op_rsp_packet(struct nci_dev *ndev, __u16 rsp_opcode,
+			     struct sk_buff *skb, struct nci_driver_ops *ops,
+			     size_t n_ops)
+{
+	struct nci_driver_ops *op;
+
+	op = ops_cmd_lookup(ops, n_ops, rsp_opcode);
+	if (!op || !op->rsp)
+		return -ENOTSUPP;
+
+	return op->rsp(ndev, skb);
+}
+
+static int nci_op_ntf_packet(struct nci_dev *ndev, __u16 ntf_opcode,
+			     struct sk_buff *skb, struct nci_driver_ops *ops,
+			     size_t n_ops)
+{
+	struct nci_driver_ops *op;
+
+	op = ops_cmd_lookup(ops, n_ops, ntf_opcode);
+	if (!op || !op->ntf)
+		return -ENOTSUPP;
+
+	return op->ntf(ndev, skb);
+}
+
+int nci_prop_rsp_packet(struct nci_dev *ndev, __u16 opcode,
+			struct sk_buff *skb)
+{
+	return nci_op_rsp_packet(ndev, opcode, skb, ndev->ops->prop_ops,
+				 ndev->ops->n_prop_ops);
+}
+
+int nci_prop_ntf_packet(struct nci_dev *ndev, __u16 opcode,
+			struct sk_buff *skb)
+{
+	return nci_op_ntf_packet(ndev, opcode, skb, ndev->ops->prop_ops,
+				 ndev->ops->n_prop_ops);
+}
+
+int nci_core_rsp_packet(struct nci_dev *ndev, __u16 opcode,
+			struct sk_buff *skb)
+{
+	return nci_op_rsp_packet(ndev, opcode, skb, ndev->ops->core_ops,
+				  ndev->ops->n_core_ops);
+}
+
+int nci_core_ntf_packet(struct nci_dev *ndev, __u16 opcode,
+			struct sk_buff *skb)
+{
+	return nci_op_ntf_packet(ndev, opcode, skb, ndev->ops->core_ops,
+				 ndev->ops->n_core_ops);
+}
 
 /* ---- NCI TX Data worker thread ---- */
 
 static void nci_tx_work(struct work_struct *work)
 {
 	struct nci_dev *ndev = container_of(work, struct nci_dev, tx_work);
+	struct nci_conn_info    *conn_info;
 	struct sk_buff *skb;
 
-	pr_debug("credits_cnt %d\n", atomic_read(&ndev->credits_cnt));
+	conn_info = nci_get_conn_info_by_conn_id(ndev, ndev->cur_conn_id);
+	if (!conn_info)
+		return;
+
+	pr_debug("credits_cnt %d\n", atomic_read(&conn_info->credits_cnt));
 
 	/* Send queued tx data */
-	while (atomic_read(&ndev->credits_cnt)) {
+	while (atomic_read(&conn_info->credits_cnt)) {
 		skb = skb_dequeue(&ndev->tx_q);
 		if (!skb)
 			return;
 
 		/* Check if data flow control is used */
-		if (atomic_read(&ndev->credits_cnt) !=
+		if (atomic_read(&conn_info->credits_cnt) !=
 		    NCI_DATA_FLOW_CONTROL_NOT_USED)
-			atomic_dec(&ndev->credits_cnt);
+			atomic_dec(&conn_info->credits_cnt);
 
 		pr_debug("NCI TX: MT=data, PBF=%d, conn_id=%d, plen=%d\n",
 			 nci_pbf(skb->data),
@@ -1092,7 +1419,9 @@ static void nci_rx_work(struct work_struct *work)
 	if (test_bit(NCI_DATA_EXCHANGE_TO, &ndev->flags)) {
 		/* complete the data exchange transaction, if exists */
 		if (test_bit(NCI_DATA_EXCHANGE, &ndev->flags))
-			nci_data_exchange_complete(ndev, NULL, -ETIMEDOUT);
+			nci_data_exchange_complete(ndev, NULL,
+						   ndev->cur_conn_id,
+						   -ETIMEDOUT);
 
 		clear_bit(NCI_DATA_EXCHANGE_TO, &ndev->flags);
 	}

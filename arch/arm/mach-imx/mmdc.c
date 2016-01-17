@@ -17,6 +17,8 @@
 #include <linux/of_address.h>
 #include <linux/of_device.h>
 
+#include "common.h"
+
 #define MMDC_MAPSR		0x404
 #define BP_MMDC_MAPSR_PSD	0
 #define BP_MMDC_MAPSR_PSS	4
@@ -68,7 +70,7 @@ int imx_mmdc_get_ddr_type(void)
 	return ddr_type;
 }
 
-static struct of_device_id imx_mmdc_dt_ids[] = {
+static const struct of_device_id imx_mmdc_dt_ids[] = {
 	{ .compatible = "fsl,imx6q-mmdc", },
 	{ /* sentinel */ }
 };

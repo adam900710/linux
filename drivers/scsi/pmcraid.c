@@ -45,6 +45,7 @@
 #include <asm/processor.h>
 #include <linux/libata.h>
 #include <linux/mutex.h>
+#include <linux/ktime.h>
 #include <scsi/scsi.h>
 #include <scsi/scsi_host.h>
 #include <scsi/scsi_device.h>
@@ -1473,13 +1474,7 @@ static int pmcraid_notify_aen(
 	}
 
 	/* send genetlink multicast message to notify appplications */
-	result = genlmsg_end(skb, msg_header);
-
-	if (result < 0) {
-		pmcraid_err("genlmsg_end failed\n");
-		nlmsg_free(skb);
-		return result;
-	}
+	genlmsg_end(skb, msg_header);
 
 	result = genlmsg_multicast(&pmcraid_event_family, skb,
 				   0, 0, GFP_ATOMIC);
@@ -4223,7 +4218,7 @@ static ssize_t pmcraid_show_adapter_id(
 static struct device_attribute pmcraid_adapter_id_attr = {
 	.attr = {
 		 .name = "adapter_id",
-		 .mode = S_IRUGO | S_IWUSR,
+		 .mode = S_IRUGO,
 		 },
 	.show = pmcraid_show_adapter_id,
 };
@@ -4260,7 +4255,6 @@ static struct scsi_host_template pmcraid_host_template = {
 	.use_clustering = ENABLE_CLUSTERING,
 	.shost_attrs = pmcraid_host_attrs,
 	.proc_name = PMCRAID_DRIVER_NAME,
-	.use_blk_tags = 1,
 };
 
 /*
@@ -5569,11 +5563,9 @@ static void pmcraid_set_timestamp(struct pmcraid_cmd *cmd)
 	__be32 time_stamp_len = cpu_to_be32(PMCRAID_TIMESTAMP_LEN);
 	struct pmcraid_ioadl_desc *ioadl = ioarcb->add_data.u.ioadl;
 
-	struct timeval tv;
 	__le64 timestamp;
 
-	do_gettimeofday(&tv);
-	timestamp = tv.tv_sec * 1000;
+	timestamp = ktime_get_real_seconds() * 1000;
 
 	pinstance->timestamp_data->timestamp[0] = (__u8)(timestamp);
 	pinstance->timestamp_data->timestamp[1] = (__u8)((timestamp) >> 8);

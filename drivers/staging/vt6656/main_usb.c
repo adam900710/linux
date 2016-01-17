@@ -34,6 +34,7 @@
  */
 #undef __NO_VERSION__
 
+#include <linux/etherdevice.h>
 #include <linux/file.h>
 #include "device.h"
 #include "card.h"
@@ -319,7 +320,7 @@ static int vnt_init_registers(struct vnt_private *priv)
 
 	/* get permanent network address */
 	memcpy(priv->permanent_net_addr, init_rsp->net_addr, 6);
-	memcpy(priv->current_net_addr, priv->permanent_net_addr, ETH_ALEN);
+	ether_addr_copy(priv->current_net_addr, priv->permanent_net_addr);
 
 	/* if exist SW network address, use it */
 	dev_dbg(&priv->usb->dev, "Network address = %pM\n",
@@ -506,13 +507,8 @@ static void vnt_tx_80211(struct ieee80211_hw *hw,
 {
 	struct vnt_private *priv = hw->priv;
 
-	ieee80211_stop_queues(hw);
-
-	if (vnt_tx_packet(priv, skb)) {
+	if (vnt_tx_packet(priv, skb))
 		ieee80211_free_txskb(hw, skb);
-
-		ieee80211_wake_queues(hw);
-	}
 }
 
 static int vnt_start(struct ieee80211_hw *hw)
@@ -521,7 +517,7 @@ static int vnt_start(struct ieee80211_hw *hw)
 
 	priv->rx_buf_sz = MAX_TOTAL_SIZE_WITH_ALL_HEADERS;
 
-	if (vnt_alloc_bufs(priv) == false) {
+	if (!vnt_alloc_bufs(priv)) {
 		dev_dbg(&priv->usb->dev, "vnt_alloc_bufs fail...\n");
 		return -ENOMEM;
 	}
@@ -700,7 +696,7 @@ static void vnt_bss_info_changed(struct ieee80211_hw *hw,
 
 	priv->current_aid = conf->aid;
 
-	if (changed & BSS_CHANGED_BSSID)
+	if (changed & BSS_CHANGED_BSSID && conf->bssid)
 		vnt_mac_set_bssid_addr(priv, (u8 *)conf->bssid);
 
 
@@ -756,6 +752,26 @@ static void vnt_bss_info_changed(struct ieee80211_hw *hw,
 			vnt_mac_reg_bits_off(priv, MAC_REG_TCR, TCR_AUTOBCNTX);
 		}
 	}
+
+	if (changed & (BSS_CHANGED_ASSOC | BSS_CHANGED_BEACON_INFO) &&
+	    priv->op_mode != NL80211_IFTYPE_AP) {
+		if (conf->assoc && conf->beacon_rate) {
+			vnt_mac_reg_bits_on(priv, MAC_REG_TFTCTL,
+					    TFTCTL_TSFCNTREN);
+
+			vnt_adjust_tsf(priv, conf->beacon_rate->hw_value,
+				       conf->sync_tsf, priv->current_tsf);
+
+			vnt_mac_set_beacon_interval(priv, conf->beacon_int);
+
+			vnt_reset_next_tbtt(priv, conf->beacon_int);
+		} else {
+			vnt_clear_current_tsf(priv);
+
+			vnt_mac_reg_bits_off(priv, MAC_REG_TFTCTL,
+					     TFTCTL_TSFCNTREN);
+		}
+	}
 }
 
 static u64 vnt_prepare_multicast(struct ieee80211_hw *hw,
@@ -784,8 +800,7 @@ static void vnt_configure(struct ieee80211_hw *hw,
 	u8 rx_mode = 0;
 	int rc;
 
-	*total_flags &= FIF_ALLMULTI | FIF_OTHER_BSS | FIF_PROMISC_IN_BSS |
-		FIF_BCN_PRBRESP_PROMISC;
+	*total_flags &= FIF_ALLMULTI | FIF_OTHER_BSS | FIF_BCN_PRBRESP_PROMISC;
 
 	rc = vnt_control_in(priv, MESSAGE_TYPE_READ, MAC_REG_RCR,
 		MESSAGE_REQUEST_MACREG, sizeof(u8), &rx_mode);
@@ -794,14 +809,6 @@ static void vnt_configure(struct ieee80211_hw *hw,
 		rx_mode = RCR_MULTICAST | RCR_BROADCAST;
 
 	dev_dbg(&priv->usb->dev, "rx mode in = %x\n", rx_mode);
-
-	if (changed_flags & FIF_PROMISC_IN_BSS) {
-		/* unconditionally log net taps */
-		if (*total_flags & FIF_PROMISC_IN_BSS)
-			rx_mode |= RCR_UNICAST;
-		else
-			rx_mode &= ~RCR_UNICAST;
-	}
 
 	if (changed_flags & FIF_ALLMULTI) {
 		if (*total_flags & FIF_ALLMULTI) {
@@ -962,6 +969,7 @@ vt6656_probe(struct usb_interface *intf, const struct usb_device_id *id)
 	hw = ieee80211_alloc_hw(sizeof(struct vnt_private), &vnt_mac_ops);
 	if (!hw) {
 		dev_err(&udev->dev, "could not register ieee80211_hw\n");
+		rc = -ENOMEM;
 		goto err_nomem;
 	}
 
@@ -985,10 +993,11 @@ vt6656_probe(struct usb_interface *intf, const struct usb_device_id *id)
 	wiphy->interface_modes = BIT(NL80211_IFTYPE_STATION) |
 		BIT(NL80211_IFTYPE_ADHOC) | BIT(NL80211_IFTYPE_AP);
 
-	priv->hw->flags = IEEE80211_HW_RX_INCLUDES_FCS |
-		IEEE80211_HW_REPORTS_TX_ACK_STATUS |
-		IEEE80211_HW_SIGNAL_DBM |
-		IEEE80211_HW_TIMING_BEACON_ONLY;
+	ieee80211_hw_set(priv->hw, TIMING_BEACON_ONLY);
+	ieee80211_hw_set(priv->hw, SIGNAL_DBM);
+	ieee80211_hw_set(priv->hw, RX_INCLUDES_FCS);
+	ieee80211_hw_set(priv->hw, REPORTS_TX_ACK_STATUS);
+	ieee80211_hw_set(priv->hw, SUPPORTS_PS);
 
 	priv->hw->max_signal = 100;
 

@@ -273,9 +273,9 @@ static void calibrate_as3935(struct as3935_state *st)
 }
 
 #ifdef CONFIG_PM_SLEEP
-static int as3935_suspend(struct spi_device *spi, pm_message_t msg)
+static int as3935_suspend(struct device *dev)
 {
-	struct iio_dev *indio_dev = spi_get_drvdata(spi);
+	struct iio_dev *indio_dev = dev_get_drvdata(dev);
 	struct as3935_state *st = iio_priv(indio_dev);
 	int val, ret;
 
@@ -293,9 +293,9 @@ err_suspend:
 	return ret;
 }
 
-static int as3935_resume(struct spi_device *spi)
+static int as3935_resume(struct device *dev)
 {
-	struct iio_dev *indio_dev = spi_get_drvdata(spi);
+	struct iio_dev *indio_dev = dev_get_drvdata(dev);
 	struct as3935_state *st = iio_priv(indio_dev);
 	int val, ret;
 
@@ -311,9 +311,12 @@ err_resume:
 
 	return ret;
 }
+
+static SIMPLE_DEV_PM_OPS(as3935_pm_ops, as3935_suspend, as3935_resume);
+#define AS3935_PM_OPS (&as3935_pm_ops)
+
 #else
-#define as3935_suspend	NULL
-#define as3935_resume	NULL
+#define AS3935_PM_OPS NULL
 #endif
 
 static int as3935_probe(struct spi_device *spi)
@@ -431,6 +434,12 @@ static int as3935_remove(struct spi_device *spi)
 	return 0;
 }
 
+static const struct of_device_id as3935_of_match[] = {
+	{ .compatible = "ams,as3935", },
+	{ /* sentinel */ },
+};
+MODULE_DEVICE_TABLE(of, as3935_of_match);
+
 static const struct spi_device_id as3935_id[] = {
 	{"as3935", 0},
 	{},
@@ -440,13 +449,12 @@ MODULE_DEVICE_TABLE(spi, as3935_id);
 static struct spi_driver as3935_driver = {
 	.driver = {
 		.name	= "as3935",
-		.owner	= THIS_MODULE,
+		.of_match_table = of_match_ptr(as3935_of_match),
+		.pm	= AS3935_PM_OPS,
 	},
 	.probe		= as3935_probe,
 	.remove		= as3935_remove,
 	.id_table	= as3935_id,
-	.suspend	= as3935_suspend,
-	.resume		= as3935_resume,
 };
 module_spi_driver(as3935_driver);
 

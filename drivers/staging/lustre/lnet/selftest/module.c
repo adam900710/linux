@@ -39,7 +39,7 @@
 #include "selftest.h"
 
 enum {
-	LST_INIT_NONE		= 0,
+	LST_INIT_NONE = 0,
 	LST_INIT_WI_SERIAL,
 	LST_INIT_WI_TEST,
 	LST_INIT_RPC,
@@ -58,44 +58,43 @@ struct cfs_wi_sched **lst_sched_test;
 static void
 lnet_selftest_fini(void)
 {
-	int	i;
+	int i;
 
 	switch (lst_init_step) {
-		case LST_INIT_CONSOLE:
-			lstcon_console_fini();
-		case LST_INIT_FW:
-			sfw_shutdown();
-		case LST_INIT_RPC:
-			srpc_shutdown();
-		case LST_INIT_WI_TEST:
-			for (i = 0;
-			     i < cfs_cpt_number(lnet_cpt_table()); i++) {
-				if (lst_sched_test[i] == NULL)
-					continue;
-				cfs_wi_sched_destroy(lst_sched_test[i]);
-			}
-			LIBCFS_FREE(lst_sched_test,
-				    sizeof(lst_sched_test[0]) *
-				    cfs_cpt_number(lnet_cpt_table()));
-			lst_sched_test = NULL;
+	case LST_INIT_CONSOLE:
+		lstcon_console_fini();
+	case LST_INIT_FW:
+		sfw_shutdown();
+	case LST_INIT_RPC:
+		srpc_shutdown();
+	case LST_INIT_WI_TEST:
+		for (i = 0;
+		     i < cfs_cpt_number(lnet_cpt_table()); i++) {
+			if (lst_sched_test[i] == NULL)
+				continue;
+			cfs_wi_sched_destroy(lst_sched_test[i]);
+		}
+		LIBCFS_FREE(lst_sched_test,
+			    sizeof(lst_sched_test[0]) *
+			    cfs_cpt_number(lnet_cpt_table()));
+		lst_sched_test = NULL;
 
-		case LST_INIT_WI_SERIAL:
-			cfs_wi_sched_destroy(lst_sched_serial);
-			lst_sched_serial = NULL;
-		case LST_INIT_NONE:
-			break;
-		default:
-			LBUG();
+	case LST_INIT_WI_SERIAL:
+		cfs_wi_sched_destroy(lst_sched_serial);
+		lst_sched_serial = NULL;
+	case LST_INIT_NONE:
+		break;
+	default:
+		LBUG();
 	}
-	return;
 }
 
 static int
 lnet_selftest_init(void)
 {
-	int	nscheds;
-	int	rc;
-	int	i;
+	int nscheds;
+	int rc;
+	int i;
 
 	rc = cfs_wi_sched_create("lst_s", lnet_cpt_table(), CFS_CPT_ANY,
 				 1, &lst_sched_serial);
@@ -150,7 +149,6 @@ error:
 	lnet_selftest_fini();
 	return rc;
 }
-
 
 MODULE_DESCRIPTION("LNet Selftest");
 MODULE_LICENSE("GPL");

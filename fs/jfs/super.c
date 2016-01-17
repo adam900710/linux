@@ -102,7 +102,7 @@ void jfs_error(struct super_block *sb, const char *fmt, ...)
 	vaf.fmt = fmt;
 	vaf.va = &args;
 
-	pr_err("ERROR: (device %s): %pf: %pV\n",
+	pr_err("ERROR: (device %s): %ps: %pV\n",
 	       sb->s_id, __builtin_return_address(0), &vaf);
 
 	va_end(args);
@@ -496,9 +496,6 @@ static int jfs_fill_super(struct super_block *sb, void *data, int silent)
 
 	jfs_info("In jfs_read_super: s_flags=0x%lx", sb->s_flags);
 
-	if (!new_valid_dev(sb->s_bdev->bd_dev))
-		return -EOVERFLOW;
-
 	sbi = kzalloc(sizeof(struct jfs_sb_info), GFP_KERNEL);
 	if (!sbi)
 		return -ENOMEM;
@@ -619,8 +616,7 @@ out_mount_failed:
 	iput(sbi->direct_inode);
 	sbi->direct_inode = NULL;
 out_unload:
-	if (sbi->nls_tab)
-		unload_nls(sbi->nls_tab);
+	unload_nls(sbi->nls_tab);
 out_kfree:
 	kfree(sbi);
 	return ret;

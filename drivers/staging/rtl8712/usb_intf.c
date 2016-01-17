@@ -144,6 +144,7 @@ static struct usb_device_id rtl871x_usb_id_tbl[] = {
 	{USB_DEVICE(0x0DF6, 0x0058)},
 	{USB_DEVICE(0x0DF6, 0x0049)},
 	{USB_DEVICE(0x0DF6, 0x004C)},
+	{USB_DEVICE(0x0DF6, 0x006C)},
 	{USB_DEVICE(0x0DF6, 0x0064)},
 	/* Skyworth */
 	{USB_DEVICE(0x14b2, 0x3300)},
@@ -301,7 +302,7 @@ void rtl871x_intf_stop(struct _adapter *padapter)
 
 void r871x_dev_unload(struct _adapter *padapter)
 {
-	if (padapter->bup == true) {
+	if (padapter->bup) {
 		/*s1.*/
 		padapter->bDriverStopped = true;
 
@@ -330,8 +331,7 @@ static void disable_ht_for_spec_devid(const struct usb_device_id *pdid,
 	u16 vid, pid;
 	u32 flags;
 	int i;
-	int num = sizeof(specific_device_id_tbl) /
-		  sizeof(struct specific_device_id);
+	int num = ARRAY_SIZE(specific_device_id_tbl);
 
 	for (i = 0; i < num; i++) {
 		vid = specific_device_id_tbl[i].idVendor;
@@ -339,7 +339,7 @@ static void disable_ht_for_spec_devid(const struct usb_device_id *pdid,
 		flags = specific_device_id_tbl[i].flags;
 
 		if ((pdid->idVendor == vid) && (pdid->idProduct == pid) &&
-		    (flags&SPEC_DEV_ID_DISABLE_HT)) {
+		    (flags & SPEC_DEV_ID_DISABLE_HT)) {
 			padapter->registrypriv.ht_enable = 0;
 			padapter->registrypriv.cbw40_enable = 0;
 			padapter->registrypriv.ampdu_enable = 0;
@@ -366,7 +366,6 @@ static int r871xu_drv_init(struct usb_interface *pusb_intf,
 	struct net_device *pnetdev;
 	struct usb_device *udev;
 
-	printk(KERN_INFO "r8712u: Staging version\n");
 	/* In this probe function, O.S. will provide the usb interface pointer
 	 * to driver. We have to increase the reference count of the usb device
 	 * structure by using the usb_get_dev function.
@@ -396,9 +395,9 @@ static int r871xu_drv_init(struct usb_interface *pusb_intf,
 	/* step 3.
 	 * initialize the dvobj_priv
 	 */
-	if (!padapter->dvobj_init)
-			goto error;
-	else {
+	if (!padapter->dvobj_init) {
+		goto error;
+	} else {
 		status = padapter->dvobj_init(padapter);
 		if (status != _SUCCESS)
 			goto error;
@@ -427,7 +426,7 @@ static int r871xu_drv_init(struct usb_interface *pusb_intf,
 			/* The following operations prevent Efuse leakage by
 			 * turning on 2.5V.
 			 */
-			tmpU1b = r8712_read8(padapter, EFUSE_TEST+3);
+			tmpU1b = r8712_read8(padapter, EFUSE_TEST + 3);
 			r8712_write8(padapter, EFUSE_TEST + 3, tmpU1b | 0x80);
 			msleep(20);
 			r8712_write8(padapter, EFUSE_TEST + 3,
@@ -463,7 +462,7 @@ static int r871xu_drv_init(struct usb_interface *pusb_intf,
 				/* Use the mac address stored in the Efuse
 				 * offset = 0x12 for usb in efuse
 				 */
-				memcpy(mac, &pdata[0x12], ETH_ALEN);
+				ether_addr_copy(mac, &pdata[0x12]);
 			}
 			eeprom_CustomerID = pdata[0x52];
 			switch (eeprom_CustomerID) {
@@ -554,8 +553,9 @@ static int r871xu_drv_init(struct usb_interface *pusb_intf,
 				padapter->ledpriv.bRegUseLed = false;
 				break;
 			}
-		} else
+		} else {
 			AutoloadFail = false;
+		}
 		if (((mac[0] == 0xff) && (mac[1] == 0xff) &&
 		     (mac[2] == 0xff) && (mac[3] == 0xff) &&
 		     (mac[4] == 0xff) && (mac[5] == 0xff)) ||
@@ -580,7 +580,7 @@ static int r871xu_drv_init(struct usb_interface *pusb_intf,
 		} else
 			dev_info(&udev->dev,
 				"r8712u: MAC Address from efuse = %pM\n", mac);
-		memcpy(pnetdev->dev_addr, mac, ETH_ALEN);
+		ether_addr_copy(pnetdev->dev_addr, mac);
 	}
 	/* step 6. Load the firmware asynchronously */
 	if (rtl871x_load_fw(padapter))
@@ -612,7 +612,7 @@ static void r871xu_dev_remove(struct usb_interface *pusb_intf)
 		release_firmware(padapter->fw);
 		/* never exit with a firmware callback pending */
 		wait_for_completion(&padapter->rtl8712_fw_ready);
-		if (drvpriv.drv_registered == true)
+		if (drvpriv.drv_registered)
 			padapter->bSurpriseRemoved = true;
 		unregister_netdev(pnetdev); /* will call netdev_close() */
 		flush_scheduled_work();

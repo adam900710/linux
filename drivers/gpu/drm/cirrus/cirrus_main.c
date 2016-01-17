@@ -293,25 +293,18 @@ cirrus_dumb_mmap_offset(struct drm_file *file,
 		     uint64_t *offset)
 {
 	struct drm_gem_object *obj;
-	int ret;
 	struct cirrus_bo *bo;
 
-	mutex_lock(&dev->struct_mutex);
 	obj = drm_gem_object_lookup(dev, file, handle);
-	if (obj == NULL) {
-		ret = -ENOENT;
-		goto out_unlock;
-	}
+	if (obj == NULL)
+		return -ENOENT;
 
 	bo = gem_to_cirrus_bo(obj);
 	*offset = cirrus_bo_mmap_offset(bo);
 
-	drm_gem_object_unreference(obj);
-	ret = 0;
-out_unlock:
-	mutex_unlock(&dev->struct_mutex);
-	return ret;
+	drm_gem_object_unreference_unlocked(obj);
 
+	return 0;
 }
 
 bool cirrus_check_framebuffer(struct cirrus_device *cdev, int width, int height,
@@ -320,6 +313,8 @@ bool cirrus_check_framebuffer(struct cirrus_device *cdev, int width, int height,
 	const int max_pitch = 0x1FF << 3; /* (4096 - 1) & ~111b bytes */
 	const int max_size = cdev->mc.vram_size;
 
+	if (bpp > cirrus_bpp)
+		return false;
 	if (bpp > 32)
 		return false;
 

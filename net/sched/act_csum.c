@@ -62,7 +62,8 @@ static int tcf_csum_init(struct net *n, struct nlattr *nla, struct nlattr *est,
 	parm = nla_data(tb[TCA_CSUM_PARMS]);
 
 	if (!tcf_hash_check(parm->index, a, bind)) {
-		ret = tcf_hash_create(parm->index, est, a, sizeof(*p), bind);
+		ret = tcf_hash_create(parm->index, est, a, sizeof(*p),
+				      bind, false);
 		if (ret)
 			return ret;
 		ret = ACT_P_CREATED;
@@ -509,7 +510,7 @@ static int tcf_csum(struct sk_buff *skb,
 	if (unlikely(action == TC_ACT_SHOT))
 		goto drop;
 
-	switch (skb->protocol) {
+	switch (tc_skb_protocol(skb)) {
 	case cpu_to_be16(ETH_P_IP):
 		if (!tcf_csum_ipv4(skb, update_flags))
 			goto drop;

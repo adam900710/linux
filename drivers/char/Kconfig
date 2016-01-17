@@ -6,6 +6,15 @@ menu "Character devices"
 
 source "drivers/tty/Kconfig"
 
+config DEVMEM
+	bool "/dev/mem virtual device support"
+	default y
+	help
+	  Say Y here if you want to support the /dev/mem device.
+	  The /dev/mem device is used to access areas of physical
+	  memory.
+	  When in doubt, say "Y".
+
 config DEVKMEM
 	bool "/dev/kmem virtual device support"
 	default y
@@ -580,14 +589,6 @@ config DEVPORT
 	default y
 
 source "drivers/s390/char/Kconfig"
-
-config MSM_SMD_PKT
-	bool "Enable device interface for some SMD packet ports"
-	default n
-	depends on MSM_SMD
-	help
-	  Enables userspace clients to read and write to some packet SMD
-	  ports via device interface for MSM chipset.
 
 config TILE_SROM
 	bool "Character-device access via hypervisor to the Tilera SPI ROM"

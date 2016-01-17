@@ -19,10 +19,10 @@
 #include <xen/grant_table.h>
 #include <xen/events.h>
 #include <xen/hvc-console.h>
+#include <xen/page.h>
 #include <xen/xen-ops.h>
 
 #include <asm/xen/hypercall.h>
-#include <asm/xen/page.h>
 #include <asm/xen/hypervisor.h>
 
 enum shutdown_state {
@@ -80,7 +80,7 @@ static int xen_suspend(void *data)
 	 * is resuming in a new domain.
 	 */
 	si->cancelled = HYPERVISOR_suspend(xen_pv_domain()
-                                           ? virt_to_mfn(xen_start_info)
+                                           ? virt_to_gfn(xen_start_info)
                                            : 0);
 
 	xen_arch_post_suspend(si->cancelled);
@@ -105,8 +105,14 @@ static void do_suspend(void)
 
 	err = freeze_processes();
 	if (err) {
-		pr_err("%s: freeze failed %d\n", __func__, err);
+		pr_err("%s: freeze processes failed %d\n", __func__, err);
 		goto out;
+	}
+
+	err = freeze_kernel_threads();
+	if (err) {
+		pr_err("%s: freeze kernel threads failed %d\n", __func__, err);
+		goto out_thaw;
 	}
 
 	err = dpm_suspend_start(PMSG_FREEZE);
@@ -125,6 +131,8 @@ static void do_suspend(void)
 		goto out_resume;
 	}
 
+	xen_arch_suspend();
+
 	si.cancelled = 1;
 
 	err = stop_machine(xen_suspend, &si, cpumask_of(0));
@@ -142,11 +150,12 @@ static void do_suspend(void)
 		si.cancelled = 1;
 	}
 
+	xen_arch_resume();
+
 out_resume:
-	if (!si.cancelled) {
-		xen_arch_resume();
+	if (!si.cancelled)
 		xs_resume();
-	} else
+	else
 		xs_suspend_cancel();
 
 	dpm_resume_end(si.cancelled ? PMSG_THAW : PMSG_RESTORE);

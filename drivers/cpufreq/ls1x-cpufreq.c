@@ -17,8 +17,8 @@
 #include <linux/platform_device.h>
 #include <linux/slab.h>
 
-#include <asm/mach-loongson1/cpufreq.h>
-#include <asm/mach-loongson1/loongson1.h>
+#include <cpufreq.h>
+#include <loongson1.h>
 
 static struct {
 	struct device *dev;
@@ -210,7 +210,6 @@ out:
 static struct platform_driver ls1x_cpufreq_platdrv = {
 	.driver = {
 		.name	= "ls1x-cpufreq",
-		.owner	= THIS_MODULE,
 	},
 	.probe		= ls1x_cpufreq_probe,
 	.remove		= ls1x_cpufreq_remove,

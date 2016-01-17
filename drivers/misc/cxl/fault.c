@@ -20,6 +20,7 @@
 #include <asm/mmu.h>
 
 #include "cxl.h"
+#include "trace.h"
 
 static bool sste_matches(struct cxl_sste *sste, struct copro_slb *slb)
 {
@@ -75,6 +76,7 @@ static void cxl_load_segment(struct cxl_context *ctx, struct copro_slb *slb)
 
 	pr_devel("CXL Populating SST[%li]: %#llx %#llx\n",
 			sste - ctx->sstp, slb->vsid, slb->esid);
+	trace_cxl_ste_write(ctx, sste - ctx->sstp, slb->esid, slb->vsid);
 
 	sste->vsid_data = cpu_to_be64(slb->vsid);
 	sste->esid_data = cpu_to_be64(slb->esid);
@@ -116,6 +118,7 @@ static int cxl_handle_segment_miss(struct cxl_context *ctx,
 	int rc;
 
 	pr_devel("CXL interrupt: Segment fault pe: %i ea: %#llx\n", ctx->pe, ea);
+	trace_cxl_ste_miss(ctx, ea);
 
 	if ((rc = cxl_fault_segment(ctx, mm, ea)))
 		cxl_ack_ae(ctx);
@@ -134,6 +137,8 @@ static void cxl_handle_page_fault(struct cxl_context *ctx,
 	unsigned flt = 0;
 	int result;
 	unsigned long access, flags, inv_flags = 0;
+
+	trace_cxl_pte_miss(ctx, dsisr, dar);
 
 	if ((result = copro_handle_mm_fault(mm, dar, dsisr, &flt))) {
 		pr_devel("copro_handle_mm_fault failed: %#x\n", result);
@@ -167,8 +172,8 @@ void cxl_handle_fault(struct work_struct *fault_work)
 		container_of(fault_work, struct cxl_context, fault_work);
 	u64 dsisr = ctx->dsisr;
 	u64 dar = ctx->dar;
-	struct task_struct *task;
-	struct mm_struct *mm;
+	struct task_struct *task = NULL;
+	struct mm_struct *mm = NULL;
 
 	if (cxl_p2n_read(ctx->afu, CXL_PSL_DSISR_An) != dsisr ||
 	    cxl_p2n_read(ctx->afu, CXL_PSL_DAR_An) != dar ||
@@ -180,20 +185,28 @@ void cxl_handle_fault(struct work_struct *fault_work)
 		return;
 	}
 
-	pr_devel("CXL BOTTOM HALF handling fault for afu pe: %i. "
-		"DSISR: %#llx DAR: %#llx\n", ctx->pe, dsisr, dar);
-
-	if (!(task = get_pid_task(ctx->pid, PIDTYPE_PID))) {
-		pr_devel("cxl_handle_fault unable to get task %i\n",
-			 pid_nr(ctx->pid));
+	/* Early return if the context is being / has been detached */
+	if (ctx->status == CLOSED) {
 		cxl_ack_ae(ctx);
 		return;
 	}
-	if (!(mm = get_task_mm(task))) {
-		pr_devel("cxl_handle_fault unable to get mm %i\n",
-			 pid_nr(ctx->pid));
-		cxl_ack_ae(ctx);
-		goto out;
+
+	pr_devel("CXL BOTTOM HALF handling fault for afu pe: %i. "
+		"DSISR: %#llx DAR: %#llx\n", ctx->pe, dsisr, dar);
+
+	if (!ctx->kernel) {
+		if (!(task = get_pid_task(ctx->pid, PIDTYPE_PID))) {
+			pr_devel("cxl_handle_fault unable to get task %i\n",
+				 pid_nr(ctx->pid));
+			cxl_ack_ae(ctx);
+			return;
+		}
+		if (!(mm = get_task_mm(task))) {
+			pr_devel("cxl_handle_fault unable to get mm %i\n",
+				 pid_nr(ctx->pid));
+			cxl_ack_ae(ctx);
+			goto out;
+		}
 	}
 
 	if (dsisr & CXL_PSL_DSISR_An_DS)
@@ -203,9 +216,11 @@ void cxl_handle_fault(struct work_struct *fault_work)
 	else
 		WARN(1, "cxl_handle_fault has nothing to handle\n");
 
-	mmput(mm);
+	if (mm)
+		mmput(mm);
 out:
-	put_task_struct(task);
+	if (task)
+		put_task_struct(task);
 }
 
 static void cxl_prefault_one(struct cxl_context *ctx, u64 ea)

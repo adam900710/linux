@@ -959,6 +959,10 @@ static const struct usb_device_id	products [] = {
 	USB_DEVICE (0x08dd, 0x90ff),
 	.driver_info =  (unsigned long) &ax8817x_info,
 }, {
+	// Billionton Systems, GUSB2AM-1G-B
+	USB_DEVICE(0x08dd, 0x0114),
+	.driver_info =  (unsigned long) &ax88178_info,
+}, {
 	// ATEN UC210T
 	USB_DEVICE (0x0557, 0x2009),
 	.driver_info =  (unsigned long) &ax8817x_info,
@@ -977,6 +981,10 @@ static const struct usb_device_id	products [] = {
 }, {
 	// Sitecom LN-031 "USB 2.0 10/100/1000 Ethernet adapter"
 	USB_DEVICE (0x0df6, 0x0056),
+	.driver_info =  (unsigned long) &ax88178_info,
+}, {
+	// Sitecom LN-028 "USB 2.0 10/100/1000 Ethernet adapter"
+	USB_DEVICE (0x0df6, 0x061c),
 	.driver_info =  (unsigned long) &ax88178_info,
 }, {
 	// corega FEther USB2-TX

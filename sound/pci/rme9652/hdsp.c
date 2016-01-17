@@ -29,6 +29,7 @@
 #include <linux/module.h>
 #include <linux/math64.h>
 #include <linux/vmalloc.h>
+#include <linux/io.h>
 
 #include <sound/core.h>
 #include <sound/control.h>
@@ -42,7 +43,6 @@
 
 #include <asm/byteorder.h>
 #include <asm/current.h>
-#include <asm/io.h>
 
 static int index[SNDRV_CARDS] = SNDRV_DEFAULT_IDX;	/* Index 0-MAX */
 static char *id[SNDRV_CARDS] = SNDRV_DEFAULT_STR;	/* ID for this card */
@@ -1428,10 +1428,8 @@ static void snd_hdsp_midi_output_timer(unsigned long data)
 	   leaving istimer wherever it was set before.
 	*/
 
-	if (hmidi->istimer) {
-		hmidi->timer.expires = 1 + jiffies;
-		add_timer(&hmidi->timer);
-	}
+	if (hmidi->istimer)
+		mod_timer(&hmidi->timer, 1 + jiffies);
 
 	spin_unlock_irqrestore (&hmidi->lock, flags);
 }
@@ -1445,11 +1443,9 @@ static void snd_hdsp_midi_output_trigger(struct snd_rawmidi_substream *substream
 	spin_lock_irqsave (&hmidi->lock, flags);
 	if (up) {
 		if (!hmidi->istimer) {
-			init_timer(&hmidi->timer);
-			hmidi->timer.function = snd_hdsp_midi_output_timer;
-			hmidi->timer.data = (unsigned long) hmidi;
-			hmidi->timer.expires = 1 + jiffies;
-			add_timer(&hmidi->timer);
+			setup_timer(&hmidi->timer, snd_hdsp_midi_output_timer,
+				    (unsigned long) hmidi);
+			mod_timer(&hmidi->timer, 1 + jiffies);
 			hmidi->istimer++;
 		}
 	} else {
@@ -1530,7 +1526,7 @@ static struct snd_rawmidi_ops snd_hdsp_midi_input =
 
 static int snd_hdsp_create_midi (struct snd_card *card, struct hdsp *hdsp, int id)
 {
-	char buf[32];
+	char buf[40];
 
 	hdsp->midi[id].id = id;
 	hdsp->midi[id].rmidi = NULL;
@@ -1541,7 +1537,7 @@ static int snd_hdsp_create_midi (struct snd_card *card, struct hdsp *hdsp, int i
 	hdsp->midi[id].pending = 0;
 	spin_lock_init (&hdsp->midi[id].lock);
 
-	sprintf (buf, "%s MIDI %d", card->shortname, id+1);
+	snprintf(buf, sizeof(buf), "%s MIDI %d", card->shortname, id + 1);
 	if (snd_rawmidi_new (card, buf, id, 1, 1, &hdsp->midi[id].rmidi) < 0)
 		return -1;
 
@@ -2810,7 +2806,8 @@ static int snd_hdsp_get_adat_sync_check(struct snd_kcontrol *kcontrol, struct sn
 	struct hdsp *hdsp = snd_kcontrol_chip(kcontrol);
 
 	offset = ucontrol->id.index - 1;
-	snd_BUG_ON(offset < 0);
+	if (snd_BUG_ON(offset < 0))
+		return -EINVAL;
 
 	switch (hdsp->io_type) {
 	case Digiface:
@@ -5115,6 +5112,7 @@ static int hdsp_request_fw_loader(struct hdsp *hdsp)
 		dev_err(hdsp->card->dev,
 			"too short firmware size %d (expected %d)\n",
 			   (int)fw->size, HDSP_FIRMWARE_SIZE);
+		release_firmware(fw);
 		return -EINVAL;
 	}
 
@@ -5309,9 +5307,7 @@ static int snd_hdsp_free(struct hdsp *hdsp)
 
 	release_firmware(hdsp->firmware);
 	vfree(hdsp->fw_uploaded);
-
-	if (hdsp->iobase)
-		iounmap(hdsp->iobase);
+	iounmap(hdsp->iobase);
 
 	if (hdsp->port)
 		pci_release_regions(hdsp->pci);

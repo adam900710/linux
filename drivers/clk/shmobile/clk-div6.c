@@ -11,12 +11,12 @@
  */
 
 #include <linux/clk-provider.h>
-#include <linux/clkdev.h>
 #include <linux/init.h>
 #include <linux/io.h>
 #include <linux/kernel.h>
 #include <linux/of.h>
 #include <linux/of_address.h>
+#include <linux/slab.h>
 
 #define CPG_DIV6_CKSTP		BIT(8)
 #define CPG_DIV6_DIV(d)		((d) & 0x3f)
@@ -54,12 +54,19 @@ static int cpg_div6_clock_enable(struct clk_hw *hw)
 static void cpg_div6_clock_disable(struct clk_hw *hw)
 {
 	struct div6_clock *clock = to_div6_clock(hw);
+	u32 val;
 
-	/* DIV6 clocks require the divisor field to be non-zero when stopping
-	 * the clock.
+	val = clk_readl(clock->reg);
+	val |= CPG_DIV6_CKSTP;
+	/*
+	 * DIV6 clocks require the divisor field to be non-zero when stopping
+	 * the clock. However, some clocks (e.g. ZB on sh73a0) fail to be
+	 * re-enabled later if the divisor field is changed when stopping the
+	 * clock
 	 */
-	clk_writel(clk_readl(clock->reg) | CPG_DIV6_CKSTP | CPG_DIV6_DIV_MASK,
-		   clock->reg);
+	if (!(val & CPG_DIV6_DIV_MASK))
+		val |= CPG_DIV6_DIV_MASK;
+	clk_writel(val, clock->reg);
 }
 
 static int cpg_div6_clock_is_enabled(struct clk_hw *hw)
@@ -82,6 +89,9 @@ static unsigned int cpg_div6_clock_calc_div(unsigned long rate,
 					    unsigned long parent_rate)
 {
 	unsigned int div;
+
+	if (!rate)
+		rate = 1;
 
 	div = DIV_ROUND_CLOSEST(parent_rate, rate);
 	return clamp_t(unsigned int, div, 1, 64);
@@ -123,13 +133,13 @@ static u8 cpg_div6_clock_get_parent(struct clk_hw *hw)
 
 	hw_index = (clk_readl(clock->reg) >> clock->src_shift) &
 		   (BIT(clock->src_width) - 1);
-	for (i = 0; i < __clk_get_num_parents(hw->clk); i++) {
+	for (i = 0; i < clk_hw_get_num_parents(hw); i++) {
 		if (clock->parents[i] == hw_index)
 			return i;
 	}
 
 	pr_err("%s: %s DIV6 clock set to invalid parent %u\n",
-	       __func__, __clk_get_name(hw->clk), hw_index);
+	       __func__, clk_hw_get_name(hw), hw_index);
 	return 0;
 }
 
@@ -139,7 +149,7 @@ static int cpg_div6_clock_set_parent(struct clk_hw *hw, u8 index)
 	u8 hw_index;
 	u32 mask;
 
-	if (index >= __clk_get_num_parents(hw->clk))
+	if (index >= clk_hw_get_num_parents(hw))
 		return -EINVAL;
 
 	mask = ~((BIT(clock->src_width) - 1) << clock->src_shift);

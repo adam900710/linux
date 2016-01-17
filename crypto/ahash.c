@@ -55,6 +55,7 @@ static int hash_walk_next(struct crypto_hash_walk *walk)
 
 	if (offset & alignmask) {
 		unsigned int unaligned = alignmask + 1 - (offset & alignmask);
+
 		if (nbytes > unaligned)
 			nbytes = unaligned;
 	}
@@ -120,7 +121,7 @@ int crypto_hash_walk_done(struct crypto_hash_walk *walk, int err)
 	if (!walk->total)
 		return 0;
 
-	walk->sg = scatterwalk_sg_next(walk->sg);
+	walk->sg = sg_next(walk->sg);
 
 	return hash_walk_new_entry(walk);
 }
@@ -543,7 +544,8 @@ static int ahash_prepare_alg(struct ahash_alg *alg)
 	struct crypto_alg *base = &alg->halg.base;
 
 	if (alg->halg.digestsize > PAGE_SIZE / 8 ||
-	    alg->halg.statesize > PAGE_SIZE / 8)
+	    alg->halg.statesize > PAGE_SIZE / 8 ||
+	    alg->halg.statesize == 0)
 		return -EINVAL;
 
 	base->cra_type = &crypto_ahash_type;

@@ -121,7 +121,7 @@ static struct pci_driver b44_pci_driver = {
 
 static const struct ssb_device_id b44_ssb_tbl[] = {
 	SSB_DEVICE(SSB_VENDOR_BROADCOM, SSB_DEV_ETHERNET, SSB_ANY_REV),
-	SSB_DEVTABLE_END
+	{},
 };
 MODULE_DEVICE_TABLE(ssb, b44_ssb_tbl);
 
@@ -400,7 +400,7 @@ static void b44_set_flow_ctrl(struct b44 *bp, u32 local, u32 remote)
 }
 
 #ifdef CONFIG_BCM47XX
-#include <bcm47xx_nvram.h>
+#include <linux/bcm47xx_nvram.h>
 static void b44_wap54g10_workaround(struct b44 *bp)
 {
 	char buf[20];
@@ -2464,6 +2464,7 @@ err_out_powerdown:
 	ssb_bus_may_powerdown(sdev->bus);
 
 err_out_free_dev:
+	netif_napi_del(&bp->napi);
 	free_netdev(dev);
 
 out:
@@ -2480,6 +2481,7 @@ static void b44_remove_one(struct ssb_device *sdev)
 		b44_unregister_phy_one(bp);
 	ssb_device_disable(sdev, 0);
 	ssb_bus_may_powerdown(sdev->bus);
+	netif_napi_del(&bp->napi);
 	free_netdev(dev);
 	ssb_pcihost_set_power_state(sdev, PCI_D3hot);
 	ssb_set_drvdata(sdev, NULL);

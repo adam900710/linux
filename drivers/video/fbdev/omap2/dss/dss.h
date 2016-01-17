@@ -100,6 +100,14 @@ enum dss_writeback_channel {
 	DSS_WB_LCD3_MGR =	7,
 };
 
+enum dss_pll_id {
+	DSS_PLL_DSI1,
+	DSS_PLL_DSI2,
+	DSS_PLL_HDMI,
+	DSS_PLL_VIDEO1,
+	DSS_PLL_VIDEO2,
+};
+
 struct dss_pll;
 
 #define DSS_PLL_MAX_HSDIVS 4
@@ -150,6 +158,7 @@ struct dss_pll_hw {
 
 struct dss_pll {
 	const char *name;
+	enum dss_pll_id id;
 
 	struct clk *clkin;
 	struct regulator *regulator;
@@ -250,12 +259,20 @@ void dss_overlay_kobj_uninit(struct omap_overlay *ovl);
 int dss_init_platform_driver(void) __init;
 void dss_uninit_platform_driver(void);
 
+int dss_runtime_get(void);
+void dss_runtime_put(void);
+
 unsigned long dss_get_dispc_clk_rate(void);
 int dss_dpi_select_source(int port, enum omap_channel channel);
 void dss_select_hdmi_venc_clk_source(enum dss_hdmi_venc_clk_source_select);
 enum dss_hdmi_venc_clk_source_select dss_get_hdmi_venc_clk_source(void);
 const char *dss_get_generic_clk_source_name(enum omap_dss_clk_source clk_src);
 void dss_dump_clocks(struct seq_file *s);
+
+/* DSS VIDEO PLL */
+struct dss_pll *dss_video_pll_init(struct platform_device *pdev, int id,
+	struct regulator *regulator);
+void dss_video_pll_uninit(struct dss_pll *pll);
 
 /* dss-of */
 struct device_node *dss_of_port_get_parent_device(struct device_node *port);
@@ -264,6 +281,10 @@ u32 dss_of_port_get_port_number(struct device_node *port);
 #if defined(CONFIG_OMAP2_DSS_DEBUGFS)
 void dss_debug_dump_clocks(struct seq_file *s);
 #endif
+
+void dss_ctrl_pll_enable(enum dss_pll_id pll_id, bool enable);
+void dss_ctrl_pll_set_control_mux(enum dss_pll_id pll_id,
+	enum omap_channel channel);
 
 void dss_sdi_init(int datapairs);
 int dss_sdi_enable(void);
@@ -288,18 +309,18 @@ bool dss_div_calc(unsigned long pck, unsigned long fck_min,
 
 /* SDI */
 int sdi_init_platform_driver(void) __init;
-void sdi_uninit_platform_driver(void) __exit;
+void sdi_uninit_platform_driver(void);
 
 #ifdef CONFIG_OMAP2_DSS_SDI
-int sdi_init_port(struct platform_device *pdev, struct device_node *port) __init;
-void sdi_uninit_port(struct device_node *port) __exit;
+int sdi_init_port(struct platform_device *pdev, struct device_node *port);
+void sdi_uninit_port(struct device_node *port);
 #else
-static inline int __init sdi_init_port(struct platform_device *pdev,
+static inline int sdi_init_port(struct platform_device *pdev,
 		struct device_node *port)
 {
 	return 0;
 }
-static inline void __exit sdi_uninit_port(struct device_node *port)
+static inline void sdi_uninit_port(struct device_node *port)
 {
 }
 #endif
@@ -312,7 +333,7 @@ struct dentry;
 struct file_operations;
 
 int dsi_init_platform_driver(void) __init;
-void dsi_uninit_platform_driver(void) __exit;
+void dsi_uninit_platform_driver(void);
 
 void dsi_dump_clocks(struct seq_file *s);
 
@@ -329,25 +350,25 @@ static inline u8 dsi_get_pixel_size(enum omap_dss_dsi_pixel_format fmt)
 
 /* DPI */
 int dpi_init_platform_driver(void) __init;
-void dpi_uninit_platform_driver(void) __exit;
+void dpi_uninit_platform_driver(void);
 
 #ifdef CONFIG_OMAP2_DSS_DPI
-int dpi_init_port(struct platform_device *pdev, struct device_node *port) __init;
-void dpi_uninit_port(struct device_node *port) __exit;
+int dpi_init_port(struct platform_device *pdev, struct device_node *port);
+void dpi_uninit_port(struct device_node *port);
 #else
-static inline int __init dpi_init_port(struct platform_device *pdev,
+static inline int dpi_init_port(struct platform_device *pdev,
 		struct device_node *port)
 {
 	return 0;
 }
-static inline void __exit dpi_uninit_port(struct device_node *port)
+static inline void dpi_uninit_port(struct device_node *port)
 {
 }
 #endif
 
 /* DISPC */
 int dispc_init_platform_driver(void) __init;
-void dispc_uninit_platform_driver(void) __exit;
+void dispc_uninit_platform_driver(void);
 void dispc_dump_clocks(struct seq_file *s);
 
 void dispc_enable_sidle(void);
@@ -397,18 +418,18 @@ int dispc_wb_setup(const struct omap_dss_writeback_info *wi,
 
 /* VENC */
 int venc_init_platform_driver(void) __init;
-void venc_uninit_platform_driver(void) __exit;
+void venc_uninit_platform_driver(void);
 
 /* HDMI */
 int hdmi4_init_platform_driver(void) __init;
-void hdmi4_uninit_platform_driver(void) __exit;
+void hdmi4_uninit_platform_driver(void);
 
 int hdmi5_init_platform_driver(void) __init;
-void hdmi5_uninit_platform_driver(void) __exit;
+void hdmi5_uninit_platform_driver(void);
 
 /* RFBI */
 int rfbi_init_platform_driver(void) __init;
-void rfbi_uninit_platform_driver(void) __exit;
+void rfbi_uninit_platform_driver(void);
 
 
 #ifdef CONFIG_OMAP2_DSS_COLLECT_IRQ_STATS
@@ -446,5 +467,6 @@ int dss_pll_write_config_type_a(struct dss_pll *pll,
 		const struct dss_pll_clock_info *cinfo);
 int dss_pll_write_config_type_b(struct dss_pll *pll,
 		const struct dss_pll_clock_info *cinfo);
+int dss_pll_wait_reset_done(struct dss_pll *pll);
 
 #endif

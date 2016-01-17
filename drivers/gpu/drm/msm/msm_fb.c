@@ -24,7 +24,7 @@
 struct msm_framebuffer {
 	struct drm_framebuffer base;
 	const struct msm_format *format;
-	struct drm_gem_object *planes[3];
+	struct drm_gem_object *planes[MAX_PLANE];
 };
 #define to_msm_framebuffer(x) container_of(x, struct msm_framebuffer, base)
 
@@ -122,7 +122,7 @@ uint32_t msm_framebuffer_iova(struct drm_framebuffer *fb, int id, int plane)
 	struct msm_framebuffer *msm_fb = to_msm_framebuffer(fb);
 	if (!msm_fb->planes[plane])
 		return 0;
-	return msm_gem_iova(msm_fb->planes[plane], id);
+	return msm_gem_iova(msm_fb->planes[plane], id) + fb->offsets[plane];
 }
 
 struct drm_gem_object *msm_framebuffer_bo(struct drm_framebuffer *fb, int plane)
@@ -172,8 +172,8 @@ struct drm_framebuffer *msm_framebuffer_init(struct drm_device *dev,
 {
 	struct msm_drm_private *priv = dev->dev_private;
 	struct msm_kms *kms = priv->kms;
-	struct msm_framebuffer *msm_fb;
-	struct drm_framebuffer *fb = NULL;
+	struct msm_framebuffer *msm_fb = NULL;
+	struct drm_framebuffer *fb;
 	const struct msm_format *format;
 	int ret, i, n;
 	unsigned int hsub, vsub;
@@ -239,8 +239,7 @@ struct drm_framebuffer *msm_framebuffer_init(struct drm_device *dev,
 	return fb;
 
 fail:
-	if (fb)
-		msm_framebuffer_destroy(fb);
+	kfree(msm_fb);
 
 	return ERR_PTR(ret);
 }

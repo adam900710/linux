@@ -1803,6 +1803,7 @@ static int r8a66597_set_selfpowered(struct usb_gadget *gadget, int is_self)
 {
 	struct r8a66597 *r8a66597 = gadget_to_r8a66597(gadget);
 
+	gadget->is_selfpowered = (is_self != 0);
 	if (is_self)
 		r8a66597->device_status |= 1 << USB_DEVICE_SELF_POWERED;
 	else
@@ -1819,7 +1820,7 @@ static const struct usb_gadget_ops r8a66597_gadget_ops = {
 	.set_selfpowered	= r8a66597_set_selfpowered,
 };
 
-static int __exit r8a66597_remove(struct platform_device *pdev)
+static int r8a66597_remove(struct platform_device *pdev)
 {
 	struct r8a66597		*r8a66597 = platform_get_drvdata(pdev);
 
@@ -1934,6 +1935,16 @@ static int r8a66597_probe(struct platform_device *pdev)
 		ep->ep.name = r8a66597_ep_name[i];
 		ep->ep.ops = &r8a66597_ep_ops;
 		usb_ep_set_maxpacket_limit(&ep->ep, 512);
+
+		if (i == 0) {
+			ep->ep.caps.type_control = true;
+		} else {
+			ep->ep.caps.type_iso = true;
+			ep->ep.caps.type_bulk = true;
+			ep->ep.caps.type_int = true;
+		}
+		ep->ep.caps.dir_in = true;
+		ep->ep.caps.dir_out = true;
 	}
 	usb_ep_set_maxpacket_limit(&r8a66597->ep[0].ep, 64);
 	r8a66597->ep[0].pipenum = 0;
@@ -1973,7 +1984,7 @@ clean_up2:
 
 /*-------------------------------------------------------------------------*/
 static struct platform_driver r8a66597_driver = {
-	.remove =	__exit_p(r8a66597_remove),
+	.remove =	r8a66597_remove,
 	.driver		= {
 		.name =	(char *) udc_name,
 	},

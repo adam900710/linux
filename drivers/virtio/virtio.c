@@ -236,7 +236,10 @@ static int virtio_dev_probe(struct device *_d)
 	if (err)
 		goto err;
 
-	add_status(dev, VIRTIO_CONFIG_S_DRIVER_OK);
+	/* If probe didn't do it, mark device DRIVER_OK ourselves. */
+	if (!(dev->config->get_status(dev) & VIRTIO_CONFIG_S_DRIVER_OK))
+		virtio_device_ready(dev);
+
 	if (drv->scan)
 		drv->scan(dev);
 
@@ -274,12 +277,6 @@ static struct bus_type virtio_bus = {
 	.probe = virtio_dev_probe,
 	.remove = virtio_dev_remove,
 };
-
-bool virtio_device_is_legacy_only(struct virtio_device_id id)
-{
-	return id.device == VIRTIO_ID_BALLOON;
-}
-EXPORT_SYMBOL_GPL(virtio_device_is_legacy_only);
 
 int register_virtio_driver(struct virtio_driver *driver)
 {
@@ -415,6 +412,7 @@ static int virtio_init(void)
 static void __exit virtio_exit(void)
 {
 	bus_unregister(&virtio_bus);
+	ida_destroy(&virtio_index_ida);
 }
 core_initcall(virtio_init);
 module_exit(virtio_exit);

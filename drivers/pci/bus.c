@@ -20,17 +20,16 @@
 void pci_add_resource_offset(struct list_head *resources, struct resource *res,
 			     resource_size_t offset)
 {
-	struct pci_host_bridge_window *window;
+	struct resource_entry *entry;
 
-	window = kzalloc(sizeof(struct pci_host_bridge_window), GFP_KERNEL);
-	if (!window) {
+	entry = resource_list_create_entry(res, 0);
+	if (!entry) {
 		printk(KERN_ERR "PCI: can't add host bridge window %pR\n", res);
 		return;
 	}
 
-	window->res = res;
-	window->offset = offset;
-	list_add_tail(&window->list, resources);
+	entry->offset = offset;
+	resource_list_add_tail(entry, resources);
 }
 EXPORT_SYMBOL(pci_add_resource_offset);
 
@@ -42,12 +41,7 @@ EXPORT_SYMBOL(pci_add_resource);
 
 void pci_free_resource_list(struct list_head *resources)
 {
-	struct pci_host_bridge_window *window, *tmp;
-
-	list_for_each_entry_safe(window, tmp, resources, list) {
-		list_del(&window->list);
-		kfree(window);
-	}
+	resource_list_free(resources);
 }
 EXPORT_SYMBOL(pci_free_resource_list);
 
@@ -98,11 +92,11 @@ void pci_bus_remove_resources(struct pci_bus *bus)
 }
 
 static struct pci_bus_region pci_32_bit = {0, 0xffffffffULL};
-#ifdef CONFIG_ARCH_DMA_ADDR_T_64BIT
+#ifdef CONFIG_PCI_BUS_ADDR_T_64BIT
 static struct pci_bus_region pci_64_bit = {0,
-				(dma_addr_t) 0xffffffffffffffffULL};
-static struct pci_bus_region pci_high = {(dma_addr_t) 0x100000000ULL,
-				(dma_addr_t) 0xffffffffffffffffULL};
+				(pci_bus_addr_t) 0xffffffffffffffffULL};
+static struct pci_bus_region pci_high = {(pci_bus_addr_t) 0x100000000ULL,
+				(pci_bus_addr_t) 0xffffffffffffffffULL};
 #endif
 
 /*
@@ -206,7 +200,7 @@ int pci_bus_alloc_resource(struct pci_bus *bus, struct resource *res,
 					  resource_size_t),
 		void *alignf_data)
 {
-#ifdef CONFIG_ARCH_DMA_ADDR_T_64BIT
+#ifdef CONFIG_PCI_BUS_ADDR_T_64BIT
 	int rc;
 
 	if (res->flags & IORESOURCE_MEM_64) {
@@ -227,6 +221,51 @@ int pci_bus_alloc_resource(struct pci_bus *bus, struct resource *res,
 					 &pci_32_bit);
 }
 EXPORT_SYMBOL(pci_bus_alloc_resource);
+
+/*
+ * The @idx resource of @dev should be a PCI-PCI bridge window.  If this
+ * resource fits inside a window of an upstream bridge, do nothing.  If it
+ * overlaps an upstream window but extends outside it, clip the resource so
+ * it fits completely inside.
+ */
+bool pci_bus_clip_resource(struct pci_dev *dev, int idx)
+{
+	struct pci_bus *bus = dev->bus;
+	struct resource *res = &dev->resource[idx];
+	struct resource orig_res = *res;
+	struct resource *r;
+	int i;
+
+	pci_bus_for_each_resource(bus, r, i) {
+		resource_size_t start, end;
+
+		if (!r)
+			continue;
+
+		if (resource_type(res) != resource_type(r))
+			continue;
+
+		start = max(r->start, res->start);
+		end = min(r->end, res->end);
+
+		if (start > end)
+			continue;	/* no overlap */
+
+		if (res->start == start && res->end == end)
+			return false;	/* no change */
+
+		res->start = start;
+		res->end = end;
+		res->flags &= ~IORESOURCE_UNSET;
+		orig_res.flags &= ~IORESOURCE_UNSET;
+		dev_printk(KERN_DEBUG, &dev->dev, "%pR clipped to %pR\n",
+				 &orig_res, res);
+
+		return true;
+	}
+
+	return false;
+}
 
 void __weak pcibios_resource_survey_bus(struct pci_bus *bus) { }
 

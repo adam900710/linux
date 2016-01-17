@@ -21,11 +21,16 @@
 #include "core.h"
 
 #if !defined(_TRACE_H_)
-static inline u32 ath10k_frm_hdr_len(const void *buf)
+static inline u32 ath10k_frm_hdr_len(const void *buf, size_t len)
 {
 	const struct ieee80211_hdr *hdr = buf;
 
-	return ieee80211_hdrlen(hdr->frame_control);
+	/* In some rare cases (e.g. fcs error) device reports frame buffer
+	 * shorter than what frame header implies (e.g. len = 0). The buffer
+	 * can still be accessed so do a simple min() to guarantee caller
+	 * doesn't get value greater than len.
+	 */
+	return min_t(u32, len, ieee80211_hdrlen(hdr->frame_control));
 }
 #endif
 
@@ -46,7 +51,7 @@ static inline void trace_ ## name(proto) {}
 #undef TRACE_SYSTEM
 #define TRACE_SYSTEM ath10k
 
-#define ATH10K_MSG_MAX 200
+#define ATH10K_MSG_MAX 400
 
 DECLARE_EVENT_CLASS(ath10k_log_event,
 	TP_PROTO(struct ath10k *ar, struct va_format *vaf),
@@ -360,13 +365,13 @@ DECLARE_EVENT_CLASS(ath10k_hdr_event,
 		__string(device, dev_name(ar->dev))
 		__string(driver, dev_driver_string(ar->dev))
 		__field(size_t, len)
-		__dynamic_array(u8, data, ath10k_frm_hdr_len(data))
+		__dynamic_array(u8, data, ath10k_frm_hdr_len(data, len))
 	),
 
 	TP_fast_assign(
 		__assign_str(device, dev_name(ar->dev));
 		__assign_str(driver, dev_driver_string(ar->dev));
-		__entry->len = ath10k_frm_hdr_len(data);
+		__entry->len = ath10k_frm_hdr_len(data, len);
 		memcpy(__get_dynamic_array(data), data, __entry->len);
 	),
 
@@ -387,15 +392,16 @@ DECLARE_EVENT_CLASS(ath10k_payload_event,
 		__string(device, dev_name(ar->dev))
 		__string(driver, dev_driver_string(ar->dev))
 		__field(size_t, len)
-		__dynamic_array(u8, payload, (len - ath10k_frm_hdr_len(data)))
+		__dynamic_array(u8, payload, (len -
+					      ath10k_frm_hdr_len(data, len)))
 	),
 
 	TP_fast_assign(
 		__assign_str(device, dev_name(ar->dev));
 		__assign_str(driver, dev_driver_string(ar->dev));
-		__entry->len = len - ath10k_frm_hdr_len(data);
+		__entry->len = len - ath10k_frm_hdr_len(data, len);
 		memcpy(__get_dynamic_array(payload),
-		       data + ath10k_frm_hdr_len(data), __entry->len);
+		       data + ath10k_frm_hdr_len(data, len), __entry->len);
 	),
 
 	TP_printk(
@@ -451,6 +457,74 @@ TRACE_EVENT(ath10k_htt_rx_desc,
 		__get_str(device),
 		__entry->len
 	 )
+);
+
+TRACE_EVENT(ath10k_wmi_diag_container,
+	    TP_PROTO(struct ath10k *ar,
+		     u8 type,
+		     u32 timestamp,
+		     u32 code,
+		     u16 len,
+		     const void *data),
+
+	TP_ARGS(ar, type, timestamp, code, len, data),
+
+	TP_STRUCT__entry(
+		__string(device, dev_name(ar->dev))
+		__string(driver, dev_driver_string(ar->dev))
+		__field(u8, type)
+		__field(u32, timestamp)
+		__field(u32, code)
+		__field(u16, len)
+		__dynamic_array(u8, data, len)
+	),
+
+	TP_fast_assign(
+		__assign_str(device, dev_name(ar->dev));
+		__assign_str(driver, dev_driver_string(ar->dev));
+		__entry->type = type;
+		__entry->timestamp = timestamp;
+		__entry->code = code;
+		__entry->len = len;
+		memcpy(__get_dynamic_array(data), data, len);
+	),
+
+	TP_printk(
+		"%s %s diag container type %hhu timestamp %u code %u len %d",
+		__get_str(driver),
+		__get_str(device),
+		__entry->type,
+		__entry->timestamp,
+		__entry->code,
+		__entry->len
+	)
+);
+
+TRACE_EVENT(ath10k_wmi_diag,
+	    TP_PROTO(struct ath10k *ar, const void *data, size_t len),
+
+	TP_ARGS(ar, data, len),
+
+	TP_STRUCT__entry(
+		__string(device, dev_name(ar->dev))
+		__string(driver, dev_driver_string(ar->dev))
+		__field(u16, len)
+		__dynamic_array(u8, data, len)
+	),
+
+	TP_fast_assign(
+		__assign_str(device, dev_name(ar->dev));
+		__assign_str(driver, dev_driver_string(ar->dev));
+		__entry->len = len;
+		memcpy(__get_dynamic_array(data), data, len);
+	),
+
+	TP_printk(
+		"%s %s tlv diag len %d",
+		__get_str(driver),
+		__get_str(device),
+		__entry->len
+	)
 );
 
 #endif /* _TRACE_H_ || TRACE_HEADER_MULTI_READ*/

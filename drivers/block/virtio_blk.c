@@ -28,8 +28,7 @@ struct virtio_blk_vq {
 	char name[VQ_NAME_LEN];
 } ____cacheline_aligned_in_smp;
 
-struct virtio_blk
-{
+struct virtio_blk {
 	struct virtio_device *vdev;
 
 	/* The disk structure for the kernel. */
@@ -52,8 +51,7 @@ struct virtio_blk
 	struct virtio_blk_vq *vqs;
 };
 
-struct virtblk_req
-{
+struct virtblk_req {
 	struct request *req;
 	struct virtio_blk_outhdr out_hdr;
 	struct virtio_scsi_inhdr in_hdr;
@@ -126,7 +124,7 @@ static inline void virtblk_request_done(struct request *req)
 		req->resid_len = virtio32_to_cpu(vblk->vdev, vbr->in_hdr.residual);
 		req->sense_len = virtio32_to_cpu(vblk->vdev, vbr->in_hdr.sense_len);
 		req->errors = virtio32_to_cpu(vblk->vdev, vbr->in_hdr.errors);
-	} else if (req->cmd_type == REQ_TYPE_SPECIAL) {
+	} else if (req->cmd_type == REQ_TYPE_DRV_PRIV) {
 		req->errors = (error != 0);
 	}
 
@@ -146,7 +144,7 @@ static void virtblk_done(struct virtqueue *vq)
 	do {
 		virtqueue_disable_cb(vq);
 		while ((vbr = virtqueue_get_buf(vblk->vqs[qid].vq, &len)) != NULL) {
-			blk_mq_complete_request(vbr->req);
+			blk_mq_complete_request(vbr->req, vbr->req->errors);
 			req_done = true;
 		}
 		if (unlikely(virtqueue_is_broken(vq)))
@@ -190,7 +188,7 @@ static int virtio_queue_rq(struct blk_mq_hw_ctx *hctx,
 			vbr->out_hdr.sector = 0;
 			vbr->out_hdr.ioprio = cpu_to_virtio32(vblk->vdev, req_get_ioprio(vbr->req));
 			break;
-		case REQ_TYPE_SPECIAL:
+		case REQ_TYPE_DRV_PRIV:
 			vbr->out_hdr.type = cpu_to_virtio32(vblk->vdev, VIRTIO_BLK_T_GET_ID);
 			vbr->out_hdr.sector = 0;
 			vbr->out_hdr.ioprio = cpu_to_virtio32(vblk->vdev, req_get_ioprio(vbr->req));
@@ -253,7 +251,7 @@ static int virtblk_get_id(struct gendisk *disk, char *id_str)
 		return PTR_ERR(req);
 	}
 
-	req->cmd_type = REQ_TYPE_SPECIAL;
+	req->cmd_type = REQ_TYPE_DRV_PRIV;
 	err = blk_execute_rq(vblk->disk->queue, vblk->disk, req, false);
 	blk_put_request(req);
 
@@ -344,7 +342,7 @@ static void virtblk_config_changed_work(struct work_struct *work)
 	struct request_queue *q = vblk->disk->queue;
 	char cap_str_2[10], cap_str_10[10];
 	char *envp[] = { "RESIZE=1", NULL };
-	u64 capacity, size;
+	u64 capacity;
 
 	/* Host must always specify the capacity. */
 	virtio_cread(vdev, struct virtio_blk_config, capacity, &capacity);
@@ -356,9 +354,10 @@ static void virtblk_config_changed_work(struct work_struct *work)
 		capacity = (sector_t)-1;
 	}
 
-	size = capacity * queue_logical_block_size(q);
-	string_get_size(size, STRING_UNITS_2, cap_str_2, sizeof(cap_str_2));
-	string_get_size(size, STRING_UNITS_10, cap_str_10, sizeof(cap_str_10));
+	string_get_size(capacity, queue_logical_block_size(q),
+			STRING_UNITS_2, cap_str_2, sizeof(cap_str_2));
+	string_get_size(capacity, queue_logical_block_size(q),
+			STRING_UNITS_10, cap_str_10, sizeof(cap_str_10));
 
 	dev_notice(&vdev->dev,
 		  "new size: %llu %d-byte logical blocks (%s/%s)\n",
@@ -479,8 +478,7 @@ static int virtblk_get_cache_mode(struct virtio_device *vdev)
 				   struct virtio_blk_config, wce,
 				   &writeback);
 	if (err)
-		writeback = virtio_has_feature(vdev, VIRTIO_BLK_F_WCE) ||
-		            virtio_has_feature(vdev, VIRTIO_F_VERSION_1);
+		writeback = virtio_has_feature(vdev, VIRTIO_BLK_F_WCE);
 
 	return writeback;
 }
@@ -575,6 +573,12 @@ static int virtblk_probe(struct virtio_device *vdev)
 	u16 min_io_size;
 	u8 physical_block_exp, alignment_offset;
 
+	if (!vdev->config->get) {
+		dev_err(&vdev->dev, "%s failure: config access disabled\n",
+			__func__);
+		return -EINVAL;
+	}
+
 	err = ida_simple_get(&vd_index_ida, 0, minor_to_index(1 << MINORBITS),
 			     GFP_KERNEL);
 	if (err < 0)
@@ -652,6 +656,7 @@ static int virtblk_probe(struct virtio_device *vdev)
 	vblk->disk->private_data = vblk;
 	vblk->disk->fops = &virtblk_fops;
 	vblk->disk->driverfs_dev = &vdev->dev;
+	vblk->disk->flags |= GENHD_FL_EXT_DEVT;
 	vblk->index = index;
 
 	/* configure queue flush support */
@@ -835,7 +840,7 @@ static unsigned int features_legacy[] = {
 static unsigned int features[] = {
 	VIRTIO_BLK_F_SEG_MAX, VIRTIO_BLK_F_SIZE_MAX, VIRTIO_BLK_F_GEOMETRY,
 	VIRTIO_BLK_F_RO, VIRTIO_BLK_F_BLK_SIZE,
-	VIRTIO_BLK_F_TOPOLOGY,
+	VIRTIO_BLK_F_WCE, VIRTIO_BLK_F_TOPOLOGY, VIRTIO_BLK_F_CONFIG_WCE,
 	VIRTIO_BLK_F_MQ,
 };
 

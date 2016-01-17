@@ -718,11 +718,6 @@ static inline unsigned int ar_next_buffer_index(unsigned int index)
 	return (index + 1) % AR_BUFFERS;
 }
 
-static inline unsigned int ar_prev_buffer_index(unsigned int index)
-{
-	return (index - 1 + AR_BUFFERS) % AR_BUFFERS;
-}
-
 static inline unsigned int ar_first_buffer_index(struct ar_context *ctx)
 {
 	return ar_next_buffer_index(ctx->last_buffer_index);
@@ -3680,6 +3675,11 @@ static int pci_probe(struct pci_dev *dev,
 
 	reg_write(ohci, OHCI1394_IsoXmitIntMaskSet, ~0);
 	ohci->it_context_support = reg_read(ohci, OHCI1394_IsoXmitIntMaskSet);
+	/* JMicron JMB38x often shows 0 at first read, just ignore it */
+	if (!ohci->it_context_support) {
+		ohci_notice(ohci, "overriding IsoXmitIntMask\n");
+		ohci->it_context_support = 0xf;
+	}
 	reg_write(ohci, OHCI1394_IsoXmitIntMaskClear, ~0);
 	ohci->it_context_mask = ohci->it_context_support;
 	ohci->n_it = hweight32(ohci->it_context_mask);

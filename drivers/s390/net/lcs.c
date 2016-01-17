@@ -88,10 +88,8 @@ static debug_info_t *lcs_dbf_trace;
 static void
 lcs_unregister_debug_facility(void)
 {
-	if (lcs_dbf_setup)
-		debug_unregister(lcs_dbf_setup);
-	if (lcs_dbf_trace)
-		debug_unregister(lcs_dbf_trace);
+	debug_unregister(lcs_dbf_setup);
+	debug_unregister(lcs_dbf_trace);
 }
 
 static int
@@ -2152,7 +2150,7 @@ lcs_new_device(struct ccwgroup_device *ccwgdev)
 	rc = lcs_detect(card);
 	if (rc) {
 		LCS_DBF_TEXT(2, setup, "dtctfail");
-		dev_err(&card->dev->dev,
+		dev_err(&ccwgdev->dev,
 			"Detecting a network adapter for LCS devices"
 			" failed with rc=%d (0x%x)\n", rc, rc);
 		lcs_stopcard(card);

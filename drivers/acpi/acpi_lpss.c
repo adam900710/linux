@@ -1,7 +1,7 @@
 /*
  * ACPI support for Intel Lynxpoint LPSS.
  *
- * Copyright (C) 2013, 2014, Intel Corporation
+ * Copyright (C) 2013, Intel Corporation
  * Authors: Mika Westerberg <mika.westerberg@linux.intel.com>
  *          Rafael J. Wysocki <rafael.j.wysocki@intel.com>
  *
@@ -11,7 +11,6 @@
  */
 
 #include <linux/acpi.h>
-#include <linux/clk.h>
 #include <linux/clkdev.h>
 #include <linux/clk-provider.h>
 #include <linux/err.h>
@@ -60,22 +59,20 @@ ACPI_MODULE_NAME("acpi_lpss");
 #define LPSS_CLK_DIVIDER		BIT(2)
 #define LPSS_LTR			BIT(3)
 #define LPSS_SAVE_CTX			BIT(4)
-#define LPSS_DEV_PROXY			BIT(5)
-#define LPSS_PROXY_REQ			BIT(6)
+#define LPSS_NO_D3_DELAY		BIT(5)
 
 struct lpss_private_data;
 
 struct lpss_device_desc {
 	unsigned int flags;
+	const char *clk_con_id;
 	unsigned int prv_offset;
 	size_t prv_size_override;
 	void (*setup)(struct lpss_private_data *pdata);
 };
 
-static struct device *proxy_device;
-
 static struct lpss_device_desc lpss_dma_desc = {
-	.flags = LPSS_CLK | LPSS_PROXY_REQ,
+	.flags = LPSS_CLK,
 };
 
 struct lpss_private_data {
@@ -109,7 +106,7 @@ static void lpss_uart_setup(struct lpss_private_data *pdata)
 	}
 }
 
-static void byt_i2c_setup(struct lpss_private_data *pdata)
+static void lpss_deassert_reset(struct lpss_private_data *pdata)
 {
 	unsigned int offset;
 	u32 val;
@@ -118,58 +115,92 @@ static void byt_i2c_setup(struct lpss_private_data *pdata)
 	val = readl(pdata->mmio_base + offset);
 	val |= LPSS_RESETS_RESET_APB | LPSS_RESETS_RESET_FUNC;
 	writel(val, pdata->mmio_base + offset);
+}
+
+#define LPSS_I2C_ENABLE			0x6c
+
+static void byt_i2c_setup(struct lpss_private_data *pdata)
+{
+	lpss_deassert_reset(pdata);
 
 	if (readl(pdata->mmio_base + pdata->dev_desc->prv_offset))
 		pdata->fixed_clk_rate = 133000000;
+
+	writel(0, pdata->mmio_base + LPSS_I2C_ENABLE);
 }
 
-static struct lpss_device_desc lpt_dev_desc = {
+static const struct lpss_device_desc lpt_dev_desc = {
 	.flags = LPSS_CLK | LPSS_CLK_GATE | LPSS_CLK_DIVIDER | LPSS_LTR,
 	.prv_offset = 0x800,
 };
 
-static struct lpss_device_desc lpt_i2c_dev_desc = {
+static const struct lpss_device_desc lpt_i2c_dev_desc = {
 	.flags = LPSS_CLK | LPSS_CLK_GATE | LPSS_LTR,
 	.prv_offset = 0x800,
 };
 
-static struct lpss_device_desc lpt_uart_dev_desc = {
+static const struct lpss_device_desc lpt_uart_dev_desc = {
 	.flags = LPSS_CLK | LPSS_CLK_GATE | LPSS_CLK_DIVIDER | LPSS_LTR,
+	.clk_con_id = "baudclk",
 	.prv_offset = 0x800,
 	.setup = lpss_uart_setup,
 };
 
-static struct lpss_device_desc lpt_sdio_dev_desc = {
+static const struct lpss_device_desc lpt_sdio_dev_desc = {
 	.flags = LPSS_LTR,
 	.prv_offset = 0x1000,
 	.prv_size_override = 0x1018,
 };
 
-static struct lpss_device_desc byt_pwm_dev_desc = {
+static const struct lpss_device_desc byt_pwm_dev_desc = {
 	.flags = LPSS_SAVE_CTX,
 };
 
-static struct lpss_device_desc byt_uart_dev_desc = {
-	.flags = LPSS_CLK | LPSS_CLK_GATE | LPSS_CLK_DIVIDER | LPSS_SAVE_CTX |
-		 LPSS_DEV_PROXY,
+static const struct lpss_device_desc bsw_pwm_dev_desc = {
+	.flags = LPSS_SAVE_CTX | LPSS_NO_D3_DELAY,
+};
+
+static const struct lpss_device_desc byt_uart_dev_desc = {
+	.flags = LPSS_CLK | LPSS_CLK_GATE | LPSS_CLK_DIVIDER | LPSS_SAVE_CTX,
+	.clk_con_id = "baudclk",
 	.prv_offset = 0x800,
 	.setup = lpss_uart_setup,
 };
 
-static struct lpss_device_desc byt_spi_dev_desc = {
-	.flags = LPSS_CLK | LPSS_CLK_GATE | LPSS_CLK_DIVIDER | LPSS_SAVE_CTX |
-		 LPSS_DEV_PROXY,
+static const struct lpss_device_desc bsw_uart_dev_desc = {
+	.flags = LPSS_CLK | LPSS_CLK_GATE | LPSS_CLK_DIVIDER | LPSS_SAVE_CTX
+			| LPSS_NO_D3_DELAY,
+	.clk_con_id = "baudclk",
+	.prv_offset = 0x800,
+	.setup = lpss_uart_setup,
+};
+
+static const struct lpss_device_desc byt_spi_dev_desc = {
+	.flags = LPSS_CLK | LPSS_CLK_GATE | LPSS_CLK_DIVIDER | LPSS_SAVE_CTX,
 	.prv_offset = 0x400,
 };
 
-static struct lpss_device_desc byt_sdio_dev_desc = {
-	.flags = LPSS_CLK | LPSS_DEV_PROXY,
+static const struct lpss_device_desc byt_sdio_dev_desc = {
+	.flags = LPSS_CLK,
 };
 
-static struct lpss_device_desc byt_i2c_dev_desc = {
-	.flags = LPSS_CLK | LPSS_SAVE_CTX | LPSS_DEV_PROXY,
+static const struct lpss_device_desc byt_i2c_dev_desc = {
+	.flags = LPSS_CLK | LPSS_SAVE_CTX,
 	.prv_offset = 0x800,
 	.setup = byt_i2c_setup,
+};
+
+static const struct lpss_device_desc bsw_i2c_dev_desc = {
+	.flags = LPSS_CLK | LPSS_SAVE_CTX | LPSS_NO_D3_DELAY,
+	.prv_offset = 0x800,
+	.setup = byt_i2c_setup,
+};
+
+static struct lpss_device_desc bsw_spi_dev_desc = {
+	.flags = LPSS_CLK | LPSS_CLK_GATE | LPSS_CLK_DIVIDER | LPSS_SAVE_CTX
+			| LPSS_NO_D3_DELAY,
+	.prv_offset = 0x400,
+	.setup = lpss_deassert_reset,
 };
 
 #else
@@ -202,11 +233,12 @@ static const struct acpi_device_id acpi_lpss_device_ids[] = {
 	{ "INT33FC", },
 
 	/* Braswell LPSS devices */
-	{ "80862288", LPSS_ADDR(byt_pwm_dev_desc) },
-	{ "8086228A", LPSS_ADDR(byt_uart_dev_desc) },
-	{ "8086228E", LPSS_ADDR(byt_spi_dev_desc) },
-	{ "808622C1", LPSS_ADDR(byt_i2c_dev_desc) },
+	{ "80862288", LPSS_ADDR(bsw_pwm_dev_desc) },
+	{ "8086228A", LPSS_ADDR(bsw_uart_dev_desc) },
+	{ "8086228E", LPSS_ADDR(bsw_spi_dev_desc) },
+	{ "808622C1", LPSS_ADDR(bsw_i2c_dev_desc) },
 
+	/* Broadwell LPSS devices */
 	{ "INT3430", LPSS_ADDR(lpt_dev_desc) },
 	{ "INT3431", LPSS_ADDR(lpt_dev_desc) },
 	{ "INT3432", LPSS_ADDR(lpt_i2c_dev_desc) },
@@ -304,21 +336,21 @@ out:
 		return PTR_ERR(clk);
 
 	pdata->clk = clk;
-	clk_register_clkdev(clk, NULL, devname);
+	clk_register_clkdev(clk, dev_desc->clk_con_id, devname);
 	return 0;
 }
 
 static int acpi_lpss_create_device(struct acpi_device *adev,
 				   const struct acpi_device_id *id)
 {
-	struct lpss_device_desc *dev_desc;
+	const struct lpss_device_desc *dev_desc;
 	struct lpss_private_data *pdata;
-	struct resource_list_entry *rentry;
+	struct resource_entry *rentry;
 	struct list_head resource_list;
 	struct platform_device *pdev;
 	int ret;
 
-	dev_desc = (struct lpss_device_desc *)id->driver_data;
+	dev_desc = (const struct lpss_device_desc *)id->driver_data;
 	if (!dev_desc) {
 		pdev = acpi_create_platform_device(adev);
 		return IS_ERR_OR_NULL(pdev) ? PTR_ERR(pdev) : 1;
@@ -333,17 +365,22 @@ static int acpi_lpss_create_device(struct acpi_device *adev,
 		goto err_out;
 
 	list_for_each_entry(rentry, &resource_list, node)
-		if (resource_type(&rentry->res) == IORESOURCE_MEM) {
+		if (resource_type(rentry->res) == IORESOURCE_MEM) {
 			if (dev_desc->prv_size_override)
 				pdata->mmio_size = dev_desc->prv_size_override;
 			else
-				pdata->mmio_size = resource_size(&rentry->res);
-			pdata->mmio_base = ioremap(rentry->res.start,
+				pdata->mmio_size = resource_size(rentry->res);
+			pdata->mmio_base = ioremap(rentry->res->start,
 						   pdata->mmio_size);
 			break;
 		}
 
 	acpi_dev_free_resource_list(&resource_list);
+
+	if (!pdata->mmio_base) {
+		ret = -ENOMEM;
+		goto err_out;
+	}
 
 	pdata->dev_desc = dev_desc;
 
@@ -374,8 +411,6 @@ static int acpi_lpss_create_device(struct acpi_device *adev,
 	adev->driver_data = pdata;
 	pdev = acpi_create_platform_device(adev);
 	if (!IS_ERR_OR_NULL(pdev)) {
-		if (!proxy_device && dev_desc->flags & LPSS_DEV_PROXY)
-			proxy_device = &pdev->dev;
 		return 1;
 	}
 
@@ -543,9 +578,14 @@ static void acpi_lpss_restore_ctx(struct device *dev,
 	 * The following delay is needed or the subsequent write operations may
 	 * fail. The LPSS devices are actually PCI devices and the PCI spec
 	 * expects 10ms delay before the device can be accessed after D3 to D0
-	 * transition.
+	 * transition. However some platforms like BSW does not need this delay.
 	 */
-	msleep(10);
+	unsigned int delay = 10;	/* default 10ms delay */
+
+	if (pdata->dev_desc->flags & LPSS_NO_D3_DELAY)
+		delay = 0;
+
+	msleep(delay);
 
 	for (i = 0; i < LPSS_PRV_REG_COUNT; i++) {
 		unsigned long offset = i * sizeof(u32);
@@ -600,26 +640,13 @@ static int acpi_lpss_runtime_suspend(struct device *dev)
 	if (pdata->dev_desc->flags & LPSS_SAVE_CTX)
 		acpi_lpss_save_ctx(dev, pdata);
 
-	ret = acpi_dev_runtime_suspend(dev);
-	if (ret)
-		return ret;
-
-	if (pdata->dev_desc->flags & LPSS_PROXY_REQ && proxy_device)
-		return pm_runtime_put_sync_suspend(proxy_device);
-
-	return 0;
+	return acpi_dev_runtime_suspend(dev);
 }
 
 static int acpi_lpss_runtime_resume(struct device *dev)
 {
 	struct lpss_private_data *pdata = acpi_driver_data(ACPI_COMPANION(dev));
 	int ret;
-
-	if (pdata->dev_desc->flags & LPSS_PROXY_REQ && proxy_device) {
-		ret = pm_runtime_get_sync(proxy_device);
-		if (ret)
-			return ret;
-	}
 
 	ret = acpi_dev_runtime_resume(dev);
 	if (ret)
@@ -637,7 +664,7 @@ static struct dev_pm_domain acpi_lpss_pm_domain = {
 #ifdef CONFIG_PM
 #ifdef CONFIG_PM_SLEEP
 		.prepare = acpi_subsys_prepare,
-		.complete = acpi_subsys_complete,
+		.complete = pm_complete_with_resume_check,
 		.suspend = acpi_subsys_suspend,
 		.suspend_late = acpi_lpss_suspend_late,
 		.resume_early = acpi_lpss_resume_early,

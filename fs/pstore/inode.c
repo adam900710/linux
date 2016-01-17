@@ -178,6 +178,7 @@ static loff_t pstore_file_llseek(struct file *file, loff_t off, int whence)
 }
 
 static const struct file_operations pstore_file_operations = {
+	.owner		= THIS_MODULE,
 	.open		= pstore_file_open,
 	.read		= pstore_file_read,
 	.llseek		= pstore_file_llseek,
@@ -190,7 +191,7 @@ static const struct file_operations pstore_file_operations = {
  */
 static int pstore_unlink(struct inode *dir, struct dentry *dentry)
 {
-	struct pstore_private *p = dentry->d_inode->i_private;
+	struct pstore_private *p = d_inode(dentry)->i_private;
 	int err;
 
 	err = pstore_check_syslog_permissions(p);
@@ -199,7 +200,7 @@ static int pstore_unlink(struct inode *dir, struct dentry *dentry)
 
 	if (p->psi->erase)
 		p->psi->erase(p->type, p->id, p->count,
-			      dentry->d_inode->i_ctime, p->psi);
+			      d_inode(dentry)->i_ctime, p->psi);
 	else
 		return -EPERM;
 
@@ -287,7 +288,7 @@ static const struct super_operations pstore_ops = {
 
 static struct super_block *pstore_sb;
 
-int pstore_is_mounted(void)
+bool pstore_is_mounted(void)
 {
 	return pstore_sb != NULL;
 }
@@ -338,36 +339,45 @@ int pstore_mkfile(enum pstore_type_id type, char *psname, u64 id, int count,
 
 	switch (type) {
 	case PSTORE_TYPE_DMESG:
-		sprintf(name, "dmesg-%s-%lld%s", psname, id,
-						compressed ? ".enc.z" : "");
+		scnprintf(name, sizeof(name), "dmesg-%s-%lld%s",
+			  psname, id, compressed ? ".enc.z" : "");
 		break;
 	case PSTORE_TYPE_CONSOLE:
-		sprintf(name, "console-%s-%lld", psname, id);
+		scnprintf(name, sizeof(name), "console-%s-%lld", psname, id);
 		break;
 	case PSTORE_TYPE_FTRACE:
-		sprintf(name, "ftrace-%s-%lld", psname, id);
+		scnprintf(name, sizeof(name), "ftrace-%s-%lld", psname, id);
 		break;
 	case PSTORE_TYPE_MCE:
-		sprintf(name, "mce-%s-%lld", psname, id);
+		scnprintf(name, sizeof(name), "mce-%s-%lld", psname, id);
 		break;
 	case PSTORE_TYPE_PPC_RTAS:
-		sprintf(name, "rtas-%s-%lld", psname, id);
+		scnprintf(name, sizeof(name), "rtas-%s-%lld", psname, id);
 		break;
 	case PSTORE_TYPE_PPC_OF:
-		sprintf(name, "powerpc-ofw-%s-%lld", psname, id);
+		scnprintf(name, sizeof(name), "powerpc-ofw-%s-%lld",
+			  psname, id);
 		break;
 	case PSTORE_TYPE_PPC_COMMON:
-		sprintf(name, "powerpc-common-%s-%lld", psname, id);
+		scnprintf(name, sizeof(name), "powerpc-common-%s-%lld",
+			  psname, id);
+		break;
+	case PSTORE_TYPE_PMSG:
+		scnprintf(name, sizeof(name), "pmsg-%s-%lld", psname, id);
+		break;
+	case PSTORE_TYPE_PPC_OPAL:
+		sprintf(name, "powerpc-opal-%s-%lld", psname, id);
 		break;
 	case PSTORE_TYPE_UNKNOWN:
-		sprintf(name, "unknown-%s-%lld", psname, id);
+		scnprintf(name, sizeof(name), "unknown-%s-%lld", psname, id);
 		break;
 	default:
-		sprintf(name, "type%d-%s-%lld", type, psname, id);
+		scnprintf(name, sizeof(name), "type%d-%s-%lld",
+			  type, psname, id);
 		break;
 	}
 
-	mutex_lock(&root->d_inode->i_mutex);
+	mutex_lock(&d_inode(root)->i_mutex);
 
 	dentry = d_alloc_name(root, name);
 	if (!dentry)
@@ -387,12 +397,12 @@ int pstore_mkfile(enum pstore_type_id type, char *psname, u64 id, int count,
 	list_add(&private->list, &allpstore);
 	spin_unlock_irqrestore(&allpstore_lock, flags);
 
-	mutex_unlock(&root->d_inode->i_mutex);
+	mutex_unlock(&d_inode(root)->i_mutex);
 
 	return 0;
 
 fail_lockedalloc:
-	mutex_unlock(&root->d_inode->i_mutex);
+	mutex_unlock(&d_inode(root)->i_mutex);
 	kfree(private);
 fail_alloc:
 	iput(inode);
@@ -447,32 +457,36 @@ static void pstore_kill_sb(struct super_block *sb)
 }
 
 static struct file_system_type pstore_fs_type = {
+	.owner          = THIS_MODULE,
 	.name		= "pstore",
 	.mount		= pstore_mount,
 	.kill_sb	= pstore_kill_sb,
 };
 
-static struct kobject *pstore_kobj;
-
 static int __init init_pstore_fs(void)
 {
-	int err = 0;
+	int err;
 
 	/* Create a convenient mount point for people to access pstore */
-	pstore_kobj = kobject_create_and_add("pstore", fs_kobj);
-	if (!pstore_kobj) {
-		err = -ENOMEM;
+	err = sysfs_create_mount_point(fs_kobj, "pstore");
+	if (err)
 		goto out;
-	}
 
 	err = register_filesystem(&pstore_fs_type);
 	if (err < 0)
-		kobject_put(pstore_kobj);
+		sysfs_remove_mount_point(fs_kobj, "pstore");
 
 out:
 	return err;
 }
 module_init(init_pstore_fs)
+
+static void __exit exit_pstore_fs(void)
+{
+	unregister_filesystem(&pstore_fs_type);
+	sysfs_remove_mount_point(fs_kobj, "pstore");
+}
+module_exit(exit_pstore_fs)
 
 MODULE_AUTHOR("Tony Luck <tony.luck@intel.com>");
 MODULE_LICENSE("GPL");

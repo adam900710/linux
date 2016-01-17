@@ -19,6 +19,7 @@
  */
 
 #include <linux/platform_device.h>
+#include <linux/clk.h>
 #include <linux/clk-provider.h>
 #include <linux/slab.h>
 #include <linux/io.h>
@@ -91,8 +92,10 @@ static int clk_wzrd_clk_notifier(struct notifier_block *nb, unsigned long event,
 
 	if (ndata->clk == clk_wzrd->clk_in1)
 		max = clk_wzrd_max_freq[clk_wzrd->speed_grade - 1];
-	if (ndata->clk == clk_wzrd->axi_clk)
+	else if (ndata->clk == clk_wzrd->axi_clk)
 		max = WZRD_ACLK_MAX_FREQ;
+	else
+		return NOTIFY_DONE;	/* should never happen */
 
 	switch (event) {
 	case PRE_RATE_CHANGE:
@@ -239,6 +242,7 @@ static int clk_wzrd_probe(struct platform_device *pdev)
 	/* register div per output */
 	for (i = WZRD_NUM_OUTPUTS - 1; i >= 0 ; i--) {
 		const char *clkout_name;
+
 		if (of_property_read_string_index(np, "clock-output-names", i,
 						  &clkout_name)) {
 			dev_err(&pdev->dev,

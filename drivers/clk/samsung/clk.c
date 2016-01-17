@@ -11,6 +11,10 @@
  * clock framework for Samsung platforms.
 */
 
+#include <linux/slab.h>
+#include <linux/clkdev.h>
+#include <linux/clk.h>
+#include <linux/clk-provider.h>
 #include <linux/of_address.h>
 #include <linux/syscore_ops.h>
 
@@ -98,7 +102,7 @@ void samsung_clk_add_lookup(struct samsung_clk_provider *ctx, struct clk *clk,
 
 /* register a list of aliases */
 void __init samsung_clk_register_alias(struct samsung_clk_provider *ctx,
-				struct samsung_clock_alias *list,
+				const struct samsung_clock_alias *list,
 				unsigned int nr_clk)
 {
 	struct clk *clk;
@@ -132,7 +136,8 @@ void __init samsung_clk_register_alias(struct samsung_clk_provider *ctx,
 
 /* register a list of fixed clocks */
 void __init samsung_clk_register_fixed_rate(struct samsung_clk_provider *ctx,
-		struct samsung_fixed_rate_clock *list, unsigned int nr_clk)
+		const struct samsung_fixed_rate_clock *list,
+		unsigned int nr_clk)
 {
 	struct clk *clk;
 	unsigned int idx, ret;
@@ -161,7 +166,7 @@ void __init samsung_clk_register_fixed_rate(struct samsung_clk_provider *ctx,
 
 /* register a list of fixed factor clocks */
 void __init samsung_clk_register_fixed_factor(struct samsung_clk_provider *ctx,
-		struct samsung_fixed_factor_clock *list, unsigned int nr_clk)
+		const struct samsung_fixed_factor_clock *list, unsigned int nr_clk)
 {
 	struct clk *clk;
 	unsigned int idx;
@@ -181,7 +186,7 @@ void __init samsung_clk_register_fixed_factor(struct samsung_clk_provider *ctx,
 
 /* register a list of mux clocks */
 void __init samsung_clk_register_mux(struct samsung_clk_provider *ctx,
-				struct samsung_mux_clock *list,
+				const struct samsung_mux_clock *list,
 				unsigned int nr_clk)
 {
 	struct clk *clk;
@@ -213,7 +218,7 @@ void __init samsung_clk_register_mux(struct samsung_clk_provider *ctx,
 
 /* register a list of div clocks */
 void __init samsung_clk_register_div(struct samsung_clk_provider *ctx,
-				struct samsung_div_clock *list,
+				const struct samsung_div_clock *list,
 				unsigned int nr_clk)
 {
 	struct clk *clk;
@@ -252,7 +257,7 @@ void __init samsung_clk_register_div(struct samsung_clk_provider *ctx,
 
 /* register a list of gate clocks */
 void __init samsung_clk_register_gate(struct samsung_clk_provider *ctx,
-				struct samsung_gate_clock *list,
+				const struct samsung_gate_clock *list,
 				unsigned int nr_clk)
 {
 	struct clk *clk;
@@ -374,19 +379,24 @@ static void samsung_clk_sleep_init(void __iomem *reg_base,
  * Common function which registers plls, muxes, dividers and gates
  * for each CMU. It also add CMU register list to register cache.
  */
-void __init samsung_cmu_register_one(struct device_node *np,
+struct samsung_clk_provider * __init samsung_cmu_register_one(
+			struct device_node *np,
 			struct samsung_cmu_info *cmu)
 {
 	void __iomem *reg_base;
 	struct samsung_clk_provider *ctx;
 
 	reg_base = of_iomap(np, 0);
-	if (!reg_base)
+	if (!reg_base) {
 		panic("%s: failed to map registers\n", __func__);
+		return NULL;
+	}
 
 	ctx = samsung_clk_init(np, reg_base, cmu->nr_clk_ids);
-	if (!ctx)
-		panic("%s: unable to alllocate ctx\n", __func__);
+	if (!ctx) {
+		panic("%s: unable to allocate ctx\n", __func__);
+		return ctx;
+	}
 
 	if (cmu->pll_clks)
 		samsung_clk_register_pll(ctx, cmu->pll_clks, cmu->nr_pll_clks,
@@ -410,4 +420,6 @@ void __init samsung_cmu_register_one(struct device_node *np,
 			cmu->nr_clk_regs);
 
 	samsung_clk_of_add_provider(np, ctx);
+
+	return ctx;
 }

@@ -268,6 +268,17 @@ static void cik_sdma_gfx_stop(struct radeon_device *rdev)
 	}
 	rdev->ring[R600_RING_TYPE_DMA_INDEX].ready = false;
 	rdev->ring[CAYMAN_RING_TYPE_DMA1_INDEX].ready = false;
+
+	/* FIXME use something else than big hammer but after few days can not
+	 * seem to find good combination so reset SDMA blocks as it seems we
+	 * do not shut them down properly. This fix hibernation and does not
+	 * affect suspend to ram.
+	 */
+	WREG32(SRBM_SOFT_RESET, SOFT_RESET_SDMA | SOFT_RESET_SDMA1);
+	(void)RREG32(SRBM_SOFT_RESET);
+	udelay(50);
+	WREG32(SRBM_SOFT_RESET, 0);
+	(void)RREG32(SRBM_SOFT_RESET);
 }
 
 /**
@@ -280,6 +291,33 @@ static void cik_sdma_gfx_stop(struct radeon_device *rdev)
 static void cik_sdma_rlc_stop(struct radeon_device *rdev)
 {
 	/* XXX todo */
+}
+
+/**
+ * cik_sdma_ctx_switch_enable - enable/disable sdma engine preemption
+ *
+ * @rdev: radeon_device pointer
+ * @enable: enable/disable preemption.
+ *
+ * Halt or unhalt the async dma engines (CIK).
+ */
+static void cik_sdma_ctx_switch_enable(struct radeon_device *rdev, bool enable)
+{
+	uint32_t reg_offset, value;
+	int i;
+
+	for (i = 0; i < 2; i++) {
+		if (i == 0)
+			reg_offset = SDMA0_REGISTER_OFFSET;
+		else
+			reg_offset = SDMA1_REGISTER_OFFSET;
+		value = RREG32(SDMA0_CNTL + reg_offset);
+		if (enable)
+			value |= AUTO_CTXSW_ENABLE;
+		else
+			value &= ~AUTO_CTXSW_ENABLE;
+		WREG32(SDMA0_CNTL + reg_offset, value);
+	}
 }
 
 /**
@@ -312,6 +350,8 @@ void cik_sdma_enable(struct radeon_device *rdev, bool enable)
 			me_cntl |= SDMA_HALT;
 		WREG32(SDMA0_ME_CNTL + reg_offset, me_cntl);
 	}
+
+	cik_sdma_ctx_switch_enable(rdev, enable);
 }
 
 /**
@@ -816,7 +856,6 @@ void cik_sdma_vm_write_pages(struct radeon_device *rdev,
 		for (; ndw > 0; ndw -= 2, --count, pe += 8) {
 			if (flags & R600_PTE_SYSTEM) {
 				value = radeon_vm_map_gart(rdev, addr);
-				value &= 0xFFFFFFFFFFFFF000ULL;
 			} else if (flags & R600_PTE_VALID) {
 				value = addr;
 			} else {

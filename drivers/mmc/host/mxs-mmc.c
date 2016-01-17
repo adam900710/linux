@@ -549,7 +549,7 @@ static const struct mmc_host_ops mxs_mmc_ops = {
 	.enable_sdio_irq = mxs_mmc_enable_sdio_irq,
 };
 
-static struct platform_device_id mxs_ssp_ids[] = {
+static const struct platform_device_id mxs_ssp_ids[] = {
 	{
 		.name = "imx23-mmc",
 		.driver_data = IMX23_SSP,
@@ -677,8 +677,7 @@ static int mxs_mmc_probe(struct platform_device *pdev)
 	return 0;
 
 out_free_dma:
-	if (ssp->dmach)
-		dma_release_channel(ssp->dmach);
+	dma_release_channel(ssp->dmach);
 out_clk_disable:
 	clk_disable_unprepare(ssp->clk);
 out_mmc_free:

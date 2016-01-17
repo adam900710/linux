@@ -113,12 +113,26 @@ UNUSUAL_DEV(0x0bc2, 0xab2a, 0x0000, 0x9999,
 		USB_SC_DEVICE, USB_PR_DEVICE, NULL,
 		US_FL_NO_ATA_1X),
 
+/* Reported-by: Benjamin Tissoires <benjamin.tissoires@redhat.com> */
+UNUSUAL_DEV(0x13fd, 0x3940, 0x0000, 0x9999,
+		"Initio Corporation",
+		"",
+		USB_SC_DEVICE, USB_PR_DEVICE, NULL,
+		US_FL_NO_ATA_1X),
+
+/* Reported-by: Tom Arild Naess <tanaess@gmail.com> */
+UNUSUAL_DEV(0x152d, 0x0539, 0x0000, 0x9999,
+		"JMicron",
+		"JMS539",
+		USB_SC_DEVICE, USB_PR_DEVICE, NULL,
+		US_FL_NO_REPORT_OPCODES),
+
 /* Reported-by: Claudio Bizzarri <claudio.bizzarri@gmail.com> */
 UNUSUAL_DEV(0x152d, 0x0567, 0x0000, 0x9999,
 		"JMicron",
 		"JMS567",
 		USB_SC_DEVICE, USB_PR_DEVICE, NULL,
-		US_FL_NO_REPORT_OPCODES),
+		US_FL_BROKEN_FUA | US_FL_NO_REPORT_OPCODES),
 
 /* Reported-by: Hans de Goede <hdegoede@redhat.com> */
 UNUSUAL_DEV(0x2109, 0x0711, 0x0000, 0x9999,
@@ -140,3 +154,10 @@ UNUSUAL_DEV(0x4971, 0x1012, 0x0000, 0x9999,
 		"External HDD",
 		USB_SC_DEVICE, USB_PR_DEVICE, NULL,
 		US_FL_IGNORE_UAS),
+
+/* Reported-by: Richard Henderson <rth@redhat.com> */
+UNUSUAL_DEV(0x4971, 0x8017, 0x0000, 0x9999,
+		"SimpleTech",
+		"External HDD",
+		USB_SC_DEVICE, USB_PR_DEVICE, NULL,
+		US_FL_NO_REPORT_OPCODES),

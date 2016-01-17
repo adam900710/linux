@@ -100,6 +100,8 @@
 #define AUART_CTRL2_TXE				(1 << 8)
 #define AUART_CTRL2_UARTEN			(1 << 0)
 
+#define AUART_LINECTRL_BAUD_DIV_MAX		0x003fffc0
+#define AUART_LINECTRL_BAUD_DIV_MIN		0x000000ec
 #define AUART_LINECTRL_BAUD_DIVINT_SHIFT	16
 #define AUART_LINECTRL_BAUD_DIVINT_MASK		0xffff0000
 #define AUART_LINECTRL_BAUD_DIVINT(v)		(((v) & 0xffff) << 16)
@@ -152,8 +154,6 @@ struct mxs_auart_port {
 	unsigned int mctrl_prev;
 	enum mxs_auart_type devtype;
 
-	unsigned int irq;
-
 	struct clk *clk;
 	struct device *dev;
 
@@ -171,14 +171,14 @@ struct mxs_auart_port {
 	bool			ms_irq_enabled;
 };
 
-static struct platform_device_id mxs_auart_devtype[] = {
+static const struct platform_device_id mxs_auart_devtype[] = {
 	{ .name = "mxs-auart-imx23", .driver_data = IMX23_AUART },
 	{ .name = "mxs-auart-imx28", .driver_data = IMX28_AUART },
 	{ /* sentinel */ }
 };
 MODULE_DEVICE_TABLE(platform, mxs_auart_devtype);
 
-static struct of_device_id mxs_auart_dt_ids[] = {
+static const struct of_device_id mxs_auart_dt_ids[] = {
 	{
 		.compatible = "fsl,imx28-auart",
 		.data = &mxs_auart_devtype[IMX28_AUART]
@@ -661,7 +661,7 @@ static void mxs_auart_settermios(struct uart_port *u,
 {
 	struct mxs_auart_port *s = to_auart_port(u);
 	u32 bm, ctrl, ctrl2, div;
-	unsigned int cflag, baud;
+	unsigned int cflag, baud, baud_min, baud_max;
 
 	cflag = termios->c_cflag;
 
@@ -754,7 +754,9 @@ static void mxs_auart_settermios(struct uart_port *u,
 	}
 
 	/* set baud rate */
-	baud = uart_get_baud_rate(u, termios, old, 0, u->uartclk);
+	baud_min = DIV_ROUND_UP(u->uartclk * 32, AUART_LINECTRL_BAUD_DIV_MAX);
+	baud_max = u->uartclk * 32 / AUART_LINECTRL_BAUD_DIV_MIN;
+	baud = uart_get_baud_rate(u, termios, old, baud_min, baud_max);
 	div = u->uartclk * 32 / baud;
 	ctrl |= AUART_LINECTRL_BAUD_DIVFRAC(div & 0x3F);
 	ctrl |= AUART_LINECTRL_BAUD_DIVINT(div >> 6);
@@ -844,7 +846,7 @@ static irqreturn_t mxs_auart_irq_handle(int irq, void *context)
 	return IRQ_HANDLED;
 }
 
-static void mxs_auart_reset(struct uart_port *u)
+static void mxs_auart_reset_deassert(struct uart_port *u)
 {
 	int i;
 	unsigned int reg;
@@ -860,6 +862,30 @@ static void mxs_auart_reset(struct uart_port *u)
 	writel(AUART_CTRL0_CLKGATE, u->membase + AUART_CTRL0_CLR);
 }
 
+static void mxs_auart_reset_assert(struct uart_port *u)
+{
+	int i;
+	u32 reg;
+
+	reg = readl(u->membase + AUART_CTRL0);
+	/* if already in reset state, keep it untouched */
+	if (reg & AUART_CTRL0_SFTRST)
+		return;
+
+	writel(AUART_CTRL0_CLKGATE, u->membase + AUART_CTRL0_CLR);
+	writel(AUART_CTRL0_SFTRST, u->membase + AUART_CTRL0_SET);
+
+	for (i = 0; i < 1000; i++) {
+		reg = readl(u->membase + AUART_CTRL0);
+		/* reset is finished when the clock is gated */
+		if (reg & AUART_CTRL0_CLKGATE)
+			return;
+		udelay(10);
+	}
+
+	dev_err(u->dev, "Failed to reset the unit.");
+}
+
 static int mxs_auart_startup(struct uart_port *u)
 {
 	int ret;
@@ -869,7 +895,13 @@ static int mxs_auart_startup(struct uart_port *u)
 	if (ret)
 		return ret;
 
-	writel(AUART_CTRL0_CLKGATE, u->membase + AUART_CTRL0_CLR);
+	if (uart_console(u)) {
+		writel(AUART_CTRL0_CLKGATE, u->membase + AUART_CTRL0_CLR);
+	} else {
+		/* reset the unit to a well known state */
+		mxs_auart_reset_assert(u);
+		mxs_auart_reset_deassert(u);
+	}
 
 	writel(AUART_CTRL2_UARTEN, u->membase + AUART_CTRL2_SET);
 
@@ -901,12 +933,14 @@ static void mxs_auart_shutdown(struct uart_port *u)
 	if (auart_dma_enabled(s))
 		mxs_auart_dma_exit(s);
 
-	writel(AUART_CTRL2_UARTEN, u->membase + AUART_CTRL2_CLR);
-
-	writel(AUART_INTR_RXIEN | AUART_INTR_RTIEN | AUART_INTR_CTSMIEN,
-			u->membase + AUART_INTR_CLR);
-
-	writel(AUART_CTRL0_CLKGATE, u->membase + AUART_CTRL0_SET);
+	if (uart_console(u)) {
+		writel(AUART_CTRL2_UARTEN, u->membase + AUART_CTRL2_CLR);
+		writel(AUART_INTR_RXIEN | AUART_INTR_RTIEN | AUART_INTR_CTSMIEN,
+				u->membase + AUART_INTR_CLR);
+		writel(AUART_CTRL0_CLKGATE, u->membase + AUART_CTRL0_SET);
+	} else {
+		mxs_auart_reset_assert(u);
+	}
 
 	clk_disable_unprepare(s->clk);
 }
@@ -1157,14 +1191,14 @@ static int serial_mxs_probe_dt(struct mxs_auart_port *s,
 	return 0;
 }
 
-static bool mxs_auart_init_gpios(struct mxs_auart_port *s, struct device *dev)
+static int mxs_auart_init_gpios(struct mxs_auart_port *s, struct device *dev)
 {
 	enum mctrl_gpio_idx i;
 	struct gpio_desc *gpiod;
 
-	s->gpios = mctrl_gpio_init(dev, 0);
-	if (IS_ERR_OR_NULL(s->gpios))
-		return false;
+	s->gpios = mctrl_gpio_init_noauto(dev, 0);
+	if (IS_ERR(s->gpios))
+		return PTR_ERR(s->gpios);
 
 	/* Block (enabled before) DMA option if RTS or CTS is GPIO line */
 	if (!RTS_AT_AUART() || !CTS_AT_AUART()) {
@@ -1182,7 +1216,7 @@ static bool mxs_auart_init_gpios(struct mxs_auart_port *s, struct device *dev)
 			s->gpio_irq[i] = -EINVAL;
 	}
 
-	return true;
+	return 0;
 }
 
 static void mxs_auart_free_gpio_irq(struct mxs_auart_port *s)
@@ -1228,37 +1262,32 @@ static int mxs_auart_probe(struct platform_device *pdev)
 			of_match_device(mxs_auart_dt_ids, &pdev->dev);
 	struct mxs_auart_port *s;
 	u32 version;
-	int ret = 0;
+	int ret, irq;
 	struct resource *r;
 
-	s = kzalloc(sizeof(struct mxs_auart_port), GFP_KERNEL);
-	if (!s) {
-		ret = -ENOMEM;
-		goto out;
-	}
+	s = devm_kzalloc(&pdev->dev, sizeof(*s), GFP_KERNEL);
+	if (!s)
+		return -ENOMEM;
 
 	ret = serial_mxs_probe_dt(s, pdev);
 	if (ret > 0)
 		s->port.line = pdev->id < 0 ? 0 : pdev->id;
 	else if (ret < 0)
-		goto out_free;
+		return ret;
 
 	if (of_id) {
 		pdev->id_entry = of_id->data;
 		s->devtype = pdev->id_entry->driver_data;
 	}
 
-	s->clk = clk_get(&pdev->dev, NULL);
-	if (IS_ERR(s->clk)) {
-		ret = PTR_ERR(s->clk);
-		goto out_free;
-	}
+	s->clk = devm_clk_get(&pdev->dev, NULL);
+	if (IS_ERR(s->clk))
+		return PTR_ERR(s->clk);
 
 	r = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	if (!r) {
-		ret = -ENXIO;
-		goto out_free_clk;
-	}
+	if (!r)
+		return -ENXIO;
+
 
 	s->port.mapbase = r->start;
 	s->port.membase = ioremap(r->start, resource_size(r));
@@ -1271,28 +1300,34 @@ static int mxs_auart_probe(struct platform_device *pdev)
 
 	s->mctrl_prev = 0;
 
-	s->irq = platform_get_irq(pdev, 0);
-	s->port.irq = s->irq;
-	ret = request_irq(s->irq, mxs_auart_irq_handle, 0, dev_name(&pdev->dev), s);
+	irq = platform_get_irq(pdev, 0);
+	if (irq < 0)
+		return irq;
+
+	s->port.irq = irq;
+	ret = devm_request_irq(&pdev->dev, irq, mxs_auart_irq_handle, 0,
+			       dev_name(&pdev->dev), s);
 	if (ret)
-		goto out_free_clk;
+		return ret;
 
 	platform_set_drvdata(pdev, s);
 
-	if (!mxs_auart_init_gpios(s, &pdev->dev))
-		dev_err(&pdev->dev,
-			"Failed to initialize GPIOs. The serial port may not work as expected\n");
+	ret = mxs_auart_init_gpios(s, &pdev->dev);
+	if (ret) {
+		dev_err(&pdev->dev, "Failed to initialize GPIOs.\n");
+		return ret;
+	}
 
 	/*
 	 * Get the GPIO lines IRQ
 	 */
 	ret = mxs_auart_request_gpio_irq(s);
 	if (ret)
-		goto out_free_irq;
+		return ret;
 
 	auart_port[s->port.line] = s;
 
-	mxs_auart_reset(&s->port);
+	mxs_auart_reset_deassert(&s->port);
 
 	ret = uart_add_one_port(&auart_driver, &s->port);
 	if (ret)
@@ -1307,14 +1342,7 @@ static int mxs_auart_probe(struct platform_device *pdev)
 
 out_free_gpio_irq:
 	mxs_auart_free_gpio_irq(s);
-out_free_irq:
 	auart_port[pdev->id] = NULL;
-	free_irq(s->irq, s);
-out_free_clk:
-	clk_put(s->clk);
-out_free:
-	kfree(s);
-out:
 	return ret;
 }
 
@@ -1323,13 +1351,8 @@ static int mxs_auart_remove(struct platform_device *pdev)
 	struct mxs_auart_port *s = platform_get_drvdata(pdev);
 
 	uart_remove_one_port(&auart_driver, &s->port);
-
 	auart_port[pdev->id] = NULL;
-
 	mxs_auart_free_gpio_irq(s);
-	clk_put(s->clk);
-	free_irq(s->irq, s);
-	kfree(s);
 
 	return 0;
 }

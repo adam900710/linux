@@ -1,6 +1,6 @@
 /**************************************************************************
  *
- * Copyright © 2011 VMware, Inc., Palo Alto, CA., USA
+ * Copyright © 2011-2014 VMware, Inc., Palo Alto, CA., USA
  * All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -35,7 +35,7 @@ struct vmw_fence_manager {
 	struct vmw_private *dev_priv;
 	spinlock_t lock;
 	struct list_head fence_list;
-	struct work_struct work, ping_work;
+	struct work_struct work;
 	u32 user_fence_size;
 	u32 fence_size;
 	u32 event_fence_action_size;
@@ -134,14 +134,6 @@ static const char *vmw_fence_get_timeline_name(struct fence *f)
 	return "svga";
 }
 
-static void vmw_fence_ping_func(struct work_struct *work)
-{
-	struct vmw_fence_manager *fman =
-		container_of(work, struct vmw_fence_manager, ping_work);
-
-	vmw_fifo_ping_host(fman->dev_priv, SVGA_SYNC_GENERIC);
-}
-
 static bool vmw_fence_enable_signaling(struct fence *f)
 {
 	struct vmw_fence_obj *fence =
@@ -150,16 +142,12 @@ static bool vmw_fence_enable_signaling(struct fence *f)
 	struct vmw_fence_manager *fman = fman_from_fence(fence);
 	struct vmw_private *dev_priv = fman->dev_priv;
 
-	__le32 __iomem *fifo_mem = dev_priv->mmio_virt;
-	u32 seqno = ioread32(fifo_mem + SVGA_FIFO_FENCE);
+	u32 *fifo_mem = dev_priv->mmio_virt;
+	u32 seqno = vmw_mmio_read(fifo_mem + SVGA_FIFO_FENCE);
 	if (seqno - fence->base.seqno < VMW_FENCE_WRAP)
 		return false;
 
-	if (mutex_trylock(&dev_priv->hw_mutex)) {
-		vmw_fifo_ping_host_locked(dev_priv, SVGA_SYNC_GENERIC);
-		mutex_unlock(&dev_priv->hw_mutex);
-	} else
-		schedule_work(&fman->ping_work);
+	vmw_fifo_ping_host(dev_priv, SVGA_SYNC_GENERIC);
 
 	return true;
 }
@@ -305,7 +293,6 @@ struct vmw_fence_manager *vmw_fence_manager_init(struct vmw_private *dev_priv)
 	INIT_LIST_HEAD(&fman->fence_list);
 	INIT_LIST_HEAD(&fman->cleanup_list);
 	INIT_WORK(&fman->work, &vmw_fence_work_func);
-	INIT_WORK(&fman->ping_work, &vmw_fence_ping_func);
 	fman->fifo_down = true;
 	fman->user_fence_size = ttm_round_pot(sizeof(struct vmw_user_fence));
 	fman->fence_size = ttm_round_pot(sizeof(struct vmw_fence_obj));
@@ -323,7 +310,6 @@ void vmw_fence_manager_takedown(struct vmw_fence_manager *fman)
 	bool lists_empty;
 
 	(void) cancel_work_sync(&fman->work);
-	(void) cancel_work_sync(&fman->ping_work);
 
 	spin_lock_irqsave(&fman->lock, irq_flags);
 	lists_empty = list_empty(&fman->fence_list) &&
@@ -400,14 +386,14 @@ static bool vmw_fence_goal_new_locked(struct vmw_fence_manager *fman,
 				      u32 passed_seqno)
 {
 	u32 goal_seqno;
-	__le32 __iomem *fifo_mem;
+	u32 *fifo_mem;
 	struct vmw_fence_obj *fence;
 
 	if (likely(!fman->seqno_valid))
 		return false;
 
 	fifo_mem = fman->dev_priv->mmio_virt;
-	goal_seqno = ioread32(fifo_mem + SVGA_FIFO_FENCE_GOAL);
+	goal_seqno = vmw_mmio_read(fifo_mem + SVGA_FIFO_FENCE_GOAL);
 	if (likely(passed_seqno - goal_seqno >= VMW_FENCE_WRAP))
 		return false;
 
@@ -415,8 +401,8 @@ static bool vmw_fence_goal_new_locked(struct vmw_fence_manager *fman,
 	list_for_each_entry(fence, &fman->fence_list, head) {
 		if (!list_empty(&fence->seq_passed_actions)) {
 			fman->seqno_valid = true;
-			iowrite32(fence->base.seqno,
-				  fifo_mem + SVGA_FIFO_FENCE_GOAL);
+			vmw_mmio_write(fence->base.seqno,
+				       fifo_mem + SVGA_FIFO_FENCE_GOAL);
 			break;
 		}
 	}
@@ -444,18 +430,18 @@ static bool vmw_fence_goal_check_locked(struct vmw_fence_obj *fence)
 {
 	struct vmw_fence_manager *fman = fman_from_fence(fence);
 	u32 goal_seqno;
-	__le32 __iomem *fifo_mem;
+	u32 *fifo_mem;
 
 	if (fence_is_signaled_locked(&fence->base))
 		return false;
 
 	fifo_mem = fman->dev_priv->mmio_virt;
-	goal_seqno = ioread32(fifo_mem + SVGA_FIFO_FENCE_GOAL);
+	goal_seqno = vmw_mmio_read(fifo_mem + SVGA_FIFO_FENCE_GOAL);
 	if (likely(fman->seqno_valid &&
 		   goal_seqno - fence->base.seqno < VMW_FENCE_WRAP))
 		return false;
 
-	iowrite32(fence->base.seqno, fifo_mem + SVGA_FIFO_FENCE_GOAL);
+	vmw_mmio_write(fence->base.seqno, fifo_mem + SVGA_FIFO_FENCE_GOAL);
 	fman->seqno_valid = true;
 
 	return true;
@@ -467,9 +453,9 @@ static void __vmw_fences_update(struct vmw_fence_manager *fman)
 	struct list_head action_list;
 	bool needs_rerun;
 	uint32_t seqno, new_seqno;
-	__le32 __iomem *fifo_mem = fman->dev_priv->mmio_virt;
+	u32 *fifo_mem = fman->dev_priv->mmio_virt;
 
-	seqno = ioread32(fifo_mem + SVGA_FIFO_FENCE);
+	seqno = vmw_mmio_read(fifo_mem + SVGA_FIFO_FENCE);
 rerun:
 	list_for_each_entry_safe(fence, next_fence, &fman->fence_list, head) {
 		if (seqno - fence->base.seqno < VMW_FENCE_WRAP) {
@@ -491,7 +477,7 @@ rerun:
 
 	needs_rerun = vmw_fence_goal_new_locked(fman, seqno);
 	if (unlikely(needs_rerun)) {
-		new_seqno = ioread32(fifo_mem + SVGA_FIFO_FENCE);
+		new_seqno = vmw_mmio_read(fifo_mem + SVGA_FIFO_FENCE);
 		if (new_seqno != seqno) {
 			seqno = new_seqno;
 			goto rerun;

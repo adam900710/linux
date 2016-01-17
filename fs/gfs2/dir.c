@@ -388,8 +388,13 @@ static __be64 *gfs2_dir_get_hash_table(struct gfs2_inode *ip)
  */
 void gfs2_dir_hash_inval(struct gfs2_inode *ip)
 {
-	__be64 *hc = ip->i_hash_cache;
+	__be64 *hc;
+
+	spin_lock(&ip->i_inode.i_lock);
+	hc = ip->i_hash_cache;
 	ip->i_hash_cache = NULL;
+	spin_unlock(&ip->i_inode.i_lock);
+
 	kvfree(hc);
 }
 
@@ -1809,7 +1814,7 @@ int gfs2_dir_del(struct gfs2_inode *dip, const struct dentry *dentry)
 		gfs2_consist_inode(dip);
 	dip->i_entries--;
 	dip->i_inode.i_mtime = dip->i_inode.i_ctime = tv;
-	if (S_ISDIR(dentry->d_inode->i_mode))
+	if (d_is_dir(dentry))
 		drop_nlink(&dip->i_inode);
 	mark_inode_dirty(&dip->i_inode);
 
@@ -1896,7 +1901,8 @@ static int leaf_dealloc(struct gfs2_inode *dip, u32 index, u32 len,
 
 	ht = kzalloc(size, GFP_NOFS | __GFP_NOWARN);
 	if (ht == NULL)
-		ht = vzalloc(size);
+		ht = __vmalloc(size, GFP_NOFS | __GFP_NOWARN | __GFP_ZERO,
+			       PAGE_KERNEL);
 	if (!ht)
 		return -ENOMEM;
 

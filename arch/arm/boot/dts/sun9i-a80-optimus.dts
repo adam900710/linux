@@ -18,11 +18,6 @@
  *     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  *     GNU General Public License for more details.
  *
- *     You should have received a copy of the GNU General Public
- *     License along with this file; if not, write to the Free
- *     Software Foundation, Inc., 51 Franklin St, Fifth Floor, Boston,
- *     MA 02110-1301 USA
- *
  * Or, alternatively,
  *
  *  b) Permission is hereby granted, free of charge, to any person
@@ -48,53 +43,23 @@
  */
 
 /dts-v1/;
-/include/ "sun9i-a80.dtsi"
+#include "sun9i-a80.dtsi"
+#include "sunxi-common-regulators.dtsi"
+
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/pinctrl/sun4i-a10.h>
 
 / {
 	model = "Merrii A80 Optimus Board";
 	compatible = "merrii,a80-optimus", "allwinner,sun9i-a80";
 
-	chosen {
-		bootargs = "earlyprintk console=ttyS0,115200";
+	aliases {
+		serial0 = &uart0;
+		serial1 = &uart4;
 	};
 
-	soc {
-		pio: pinctrl@06000800 {
-			i2c3_pins_a: i2c3@0 {
-				/* Enable internal pull-up */
-				allwinner,pull = <1>;
-			};
-
-			led_pins_optimus: led-pins@0 {
-				allwinner,pins = "PH0", "PH1";
-				allwinner,function = "gpio_out";
-				allwinner,drive = <0>;
-				allwinner,pull = <0>;
-			};
-
-			uart4_pins_a: uart4@0 {
-				/* Enable internal pull-up */
-				allwinner,pull = <1>;
-			};
-		};
-
-		uart0: serial@07000000 {
-			pinctrl-names = "default";
-			pinctrl-0 = <&uart0_pins_a>;
-			status = "okay";
-		};
-
-		uart4: serial@07001000 {
-			pinctrl-names = "default";
-			pinctrl-0 = <&uart4_pins_a>;
-			status = "okay";
-		};
-
-		i2c3: i2c@07003400 {
-			pinctrl-names = "default";
-			pinctrl-0 = <&i2c3_pins_a>;
-			status = "okay";
-		};
+	chosen {
+		stdout-path = "serial0:115200n8";
 	};
 
 	leds {
@@ -106,14 +71,142 @@
 
 		led2 {
 			label = "optimus:led2:usr";
-			gpios = <&pio 7 1 0>;
+			gpios = <&pio 7 1 GPIO_ACTIVE_HIGH>;
 		};
 
 		/* led3 is on PM15, in R_PIO */
 
 		led4 {
 			label = "optimus:led4:usr";
-			gpios = <&pio 7 0 0>;
+			gpios = <&pio 7 0 GPIO_ACTIVE_HIGH>;
 		};
 	};
+
+	reg_usb3_vbus: usb3-vbus {
+		compatible = "regulator-fixed";
+		pinctrl-names = "default";
+		pinctrl-0 = <&usb3_vbus_pin_optimus>;
+		regulator-name = "usb3-vbus";
+		regulator-min-microvolt = <5000000>;
+		regulator-max-microvolt = <5000000>;
+		enable-active-high;
+		gpio = <&pio 7 5 GPIO_ACTIVE_HIGH>; /* PH5 */
+	};
+};
+
+&ehci0 {
+	status = "okay";
+};
+
+&ehci1 {
+	status = "okay";
+};
+
+&ehci2 {
+	status = "okay";
+};
+
+&i2c3 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&i2c3_pins_a>;
+	status = "okay";
+};
+
+&i2c3_pins_a {
+	/* Enable internal pull-up */
+	allwinner,pull = <SUN4I_PINCTRL_PULL_UP>;
+};
+
+&ohci0 {
+	status = "okay";
+};
+
+&ohci2 {
+	status = "okay";
+};
+
+&pio {
+	led_pins_optimus: led-pins@0 {
+		allwinner,pins = "PH0", "PH1";
+		allwinner,function = "gpio_out";
+		allwinner,drive = <SUN4I_PINCTRL_10_MA>;
+		allwinner,pull = <SUN4I_PINCTRL_NO_PULL>;
+	};
+
+	mmc0_cd_pin_optimus: mmc0_cd_pin@0 {
+		allwinner,pins = "PH18";
+		allwinner,function = "gpio_in";
+		allwinner,drive = <SUN4I_PINCTRL_10_MA>;
+		allwinner,pull = <SUN4I_PINCTRL_PULL_UP>;
+	};
+
+	usb1_vbus_pin_optimus: usb1_vbus_pin@1 {
+		allwinner,pins = "PH4";
+		allwinner,function = "gpio_out";
+		allwinner,drive = <SUN4I_PINCTRL_10_MA>;
+		allwinner,pull = <SUN4I_PINCTRL_NO_PULL>;
+	};
+
+	usb3_vbus_pin_optimus: usb3_vbus_pin@1 {
+		allwinner,pins = "PH5";
+		allwinner,function = "gpio_out";
+		allwinner,drive = <SUN4I_PINCTRL_10_MA>;
+		allwinner,pull = <SUN4I_PINCTRL_NO_PULL>;
+	};
+};
+
+&mmc0 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&mmc0_pins>, <&mmc0_cd_pin_optimus>;
+	vmmc-supply = <&reg_vcc3v0>;
+	bus-width = <4>;
+	cd-gpios = <&pio 7 18 GPIO_ACTIVE_HIGH>; /* PH8 */
+	cd-inverted;
+	status = "okay";
+};
+
+&mmc2 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&mmc2_8bit_pins>;
+	vmmc-supply = <&reg_vcc3v0>;
+	bus-width = <8>;
+	non-removable;
+	status = "okay";
+};
+
+&reg_usb1_vbus {
+	pinctrl-0 = <&usb1_vbus_pin_optimus>;
+	gpio = <&pio 7 4 GPIO_ACTIVE_HIGH>; /* PH4 */
+	status = "okay";
+};
+
+&uart0 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&uart0_pins_a>;
+	status = "okay";
+};
+
+&uart4 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&uart4_pins_a>;
+	status = "okay";
+};
+
+&uart4_pins_a {
+	/* Enable internal pull-up */
+	allwinner,pull = <SUN4I_PINCTRL_PULL_UP>;
+};
+
+&usbphy1 {
+	phy-supply = <&reg_usb1_vbus>;
+	status = "okay";
+};
+
+&usbphy2 {
+	status = "okay";
+};
+
+&usbphy3 {
+	phy-supply = <&reg_usb3_vbus>;
+	status = "okay";
 };

@@ -61,7 +61,6 @@ static const struct usb_device_id id_table[] = {
 	{ USB_DEVICE(DCU10_VENDOR_ID, DCU10_PRODUCT_ID) },
 	{ USB_DEVICE(SITECOM_VENDOR_ID, SITECOM_PRODUCT_ID) },
 	{ USB_DEVICE(ALCATEL_VENDOR_ID, ALCATEL_PRODUCT_ID) },
-	{ USB_DEVICE(SAMSUNG_VENDOR_ID, SAMSUNG_PRODUCT_ID) },
 	{ USB_DEVICE(SIEMENS_VENDOR_ID, SIEMENS_PRODUCT_ID_SX1),
 		.driver_info = PL2303_QUIRK_UART_STATE_IDX0 },
 	{ USB_DEVICE(SIEMENS_VENDOR_ID, SIEMENS_PRODUCT_ID_X65),
@@ -132,6 +131,7 @@ MODULE_DEVICE_TABLE(usb, id_table);
 #define UART_OVERRUN_ERROR		0x40
 #define UART_CTS			0x80
 
+static void pl2303_set_break(struct usb_serial_port *port, bool enable);
 
 enum pl2303_type {
 	TYPE_01,	/* Type 0 and 1 (difference unknown) */
@@ -362,21 +362,38 @@ static speed_t pl2303_encode_baud_rate_direct(unsigned char buf[4],
 static speed_t pl2303_encode_baud_rate_divisor(unsigned char buf[4],
 								speed_t baud)
 {
-	unsigned int tmp;
+	unsigned int baseline, mantissa, exponent;
 
 	/*
 	 * Apparently the formula is:
-	 * baudrate = 12M * 32 / (2^buf[1]) / buf[0]
+	 *   baudrate = 12M * 32 / (mantissa * 4^exponent)
+	 * where
+	 *   mantissa = buf[8:0]
+	 *   exponent = buf[11:9]
 	 */
-	tmp = 12000000 * 32 / baud;
+	baseline = 12000000 * 32;
+	mantissa = baseline / baud;
+	if (mantissa == 0)
+		mantissa = 1;	/* Avoid dividing by zero if baud > 32*12M. */
+	exponent = 0;
+	while (mantissa >= 512) {
+		if (exponent < 7) {
+			mantissa >>= 2;	/* divide by 4 */
+			exponent++;
+		} else {
+			/* Exponent is maxed. Trim mantissa and leave. */
+			mantissa = 511;
+			break;
+		}
+	}
+
 	buf[3] = 0x80;
 	buf[2] = 0;
-	buf[1] = (tmp >= 256);
-	while (tmp >= 256) {
-		tmp >>= 2;
-		buf[1] <<= 1;
-	}
-	buf[0] = tmp;
+	buf[1] = exponent << 1 | mantissa >> 8;
+	buf[0] = mantissa & 0xff;
+
+	/* Calculate and return the exact baud rate. */
+	baud = (baseline / mantissa) >> (exponent << 1);
 
 	return baud;
 }
@@ -615,6 +632,7 @@ static void pl2303_close(struct usb_serial_port *port)
 {
 	usb_serial_generic_close(port);
 	usb_kill_urb(port->interrupt_in_urb);
+	pl2303_set_break(port, false);
 }
 
 static int pl2303_open(struct tty_struct *tty, struct usb_serial_port *port)
@@ -741,17 +759,16 @@ static int pl2303_ioctl(struct tty_struct *tty,
 	return -ENOIOCTLCMD;
 }
 
-static void pl2303_break_ctl(struct tty_struct *tty, int break_state)
+static void pl2303_set_break(struct usb_serial_port *port, bool enable)
 {
-	struct usb_serial_port *port = tty->driver_data;
 	struct usb_serial *serial = port->serial;
 	u16 state;
 	int result;
 
-	if (break_state == 0)
-		state = BREAK_OFF;
-	else
+	if (enable)
 		state = BREAK_ON;
+	else
+		state = BREAK_OFF;
 
 	dev_dbg(&port->dev, "%s - turning break %s\n", __func__,
 			state == BREAK_OFF ? "off" : "on");
@@ -761,6 +778,13 @@ static void pl2303_break_ctl(struct tty_struct *tty, int break_state)
 				 0, NULL, 0, 100);
 	if (result)
 		dev_err(&port->dev, "error sending break = %d\n", result);
+}
+
+static void pl2303_break_ctl(struct tty_struct *tty, int state)
+{
+	struct usb_serial_port *port = tty->driver_data;
+
+	pl2303_set_break(port, state);
 }
 
 static void pl2303_update_line_status(struct usb_serial_port *port,

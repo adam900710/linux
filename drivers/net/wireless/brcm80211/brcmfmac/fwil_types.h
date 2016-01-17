@@ -32,7 +32,11 @@
 #define	BRCMF_BSS_INFO_VERSION	109 /* curr ver of brcmf_bss_info_le struct */
 #define BRCMF_BSS_RSSI_ON_CHANNEL	0x0002
 
-#define BRCMF_STA_ASSOC			0x10		/* Associated */
+#define BRCMF_STA_WME              0x00000002      /* WMM association */
+#define BRCMF_STA_AUTHE            0x00000008      /* Authenticated */
+#define BRCMF_STA_ASSOC            0x00000010      /* Associated */
+#define BRCMF_STA_AUTHO            0x00000020      /* Authorized */
+#define BRCMF_STA_SCBSTATS         0x00004000      /* Per STA debug stats */
 
 /* size of brcmf_scan_params not including variable length array */
 #define BRCMF_SCAN_PARAMS_FIXED_SIZE	64
@@ -112,6 +116,10 @@
 #define BRCMF_WOWL_MAXPATTERNS		8
 #define BRCMF_WOWL_MAXPATTERNSIZE	128
 
+#define BRCMF_COUNTRY_BUF_SZ		4
+#define BRCMF_ANT_MAX			4
+
+#define BRCMF_MAX_ASSOCLIST		128
 
 /* join preference types for join_pref iovar */
 enum brcmf_join_pref_types {
@@ -455,25 +463,61 @@ struct brcmf_channel_info_le {
 };
 
 struct brcmf_sta_info_le {
-	__le16	ver;		/* version of this struct */
-	__le16	len;		/* length in bytes of this structure */
-	__le16	cap;		/* sta's advertised capabilities */
-	__le32	flags;		/* flags defined below */
-	__le32	idle;		/* time since data pkt rx'd from sta */
-	u8	ea[ETH_ALEN];		/* Station address */
-	__le32	count;			/* # rates in this set */
-	u8	rates[BRCMF_MAXRATES_IN_SET];	/* rates in 500kbps units */
+	__le16 ver;		/* version of this struct */
+	__le16 len;		/* length in bytes of this structure */
+	__le16 cap;		/* sta's advertised capabilities */
+	__le32 flags;		/* flags defined below */
+	__le32 idle;		/* time since data pkt rx'd from sta */
+	u8 ea[ETH_ALEN];		/* Station address */
+	__le32 count;			/* # rates in this set */
+	u8 rates[BRCMF_MAXRATES_IN_SET];	/* rates in 500kbps units */
 						/* w/hi bit set if basic */
-	__le32	in;		/* seconds elapsed since associated */
-	__le32	listen_interval_inms; /* Min Listen interval in ms for STA */
-	__le32	tx_pkts;	/* # of packets transmitted */
-	__le32	tx_failures;	/* # of packets failed */
-	__le32	rx_ucast_pkts;	/* # of unicast packets received */
-	__le32	rx_mcast_pkts;	/* # of multicast packets received */
-	__le32	tx_rate;	/* Rate of last successful tx frame */
-	__le32	rx_rate;	/* Rate of last successful rx frame */
-	__le32	rx_decrypt_succeeds;	/* # of packet decrypted successfully */
-	__le32	rx_decrypt_failures;	/* # of packet decrypted failed */
+	__le32 in;		/* seconds elapsed since associated */
+	__le32 listen_interval_inms; /* Min Listen interval in ms for STA */
+	__le32 tx_pkts;	/* # of packets transmitted */
+	__le32 tx_failures;	/* # of packets failed */
+	__le32 rx_ucast_pkts;	/* # of unicast packets received */
+	__le32 rx_mcast_pkts;	/* # of multicast packets received */
+	__le32 tx_rate;	/* Rate of last successful tx frame */
+	__le32 rx_rate;	/* Rate of last successful rx frame */
+	__le32 rx_decrypt_succeeds;	/* # of packet decrypted successfully */
+	__le32 rx_decrypt_failures;	/* # of packet decrypted failed */
+	__le32 tx_tot_pkts;    /* # of tx pkts (ucast + mcast) */
+	__le32 rx_tot_pkts;    /* # of data packets recvd (uni + mcast) */
+	__le32 tx_mcast_pkts;  /* # of mcast pkts txed */
+	__le64 tx_tot_bytes;   /* data bytes txed (ucast + mcast) */
+	__le64 rx_tot_bytes;   /* data bytes recvd (ucast + mcast) */
+	__le64 tx_ucast_bytes; /* data bytes txed (ucast) */
+	__le64 tx_mcast_bytes; /* # data bytes txed (mcast) */
+	__le64 rx_ucast_bytes; /* data bytes recvd (ucast) */
+	__le64 rx_mcast_bytes; /* data bytes recvd (mcast) */
+	s8 rssi[BRCMF_ANT_MAX];   /* per antenna rssi */
+	s8 nf[BRCMF_ANT_MAX];     /* per antenna noise floor */
+	__le16 aid;                    /* association ID */
+	__le16 ht_capabilities;        /* advertised ht caps */
+	__le16 vht_flags;              /* converted vht flags */
+	__le32 tx_pkts_retry_cnt;      /* # of frames where a retry was
+					 * exhausted.
+					 */
+	__le32 tx_pkts_retry_exhausted; /* # of user frames where a retry
+					 * was exhausted
+					 */
+	s8 rx_lastpkt_rssi[BRCMF_ANT_MAX]; /* Per antenna RSSI of last
+					    * received data frame.
+					    */
+	/* TX WLAN retry/failure statistics:
+	 * Separated for host requested frames and locally generated frames.
+	 * Include unicast frame only where the retries/failures can be counted.
+	 */
+	__le32 tx_pkts_total;          /* # user frames sent successfully */
+	__le32 tx_pkts_retries;        /* # user frames retries */
+	__le32 tx_pkts_fw_total;       /* # FW generated sent successfully */
+	__le32 tx_pkts_fw_retries;     /* # retries for FW generated frames */
+	__le32 tx_pkts_fw_retry_exhausted;     /* # FW generated where a retry
+						* was exhausted
+						*/
+	__le32 rx_pkts_retried;        /* # rx with retry bit set */
+	__le32 tx_rate_fallback;       /* lowest fallback TX rate */
 };
 
 struct brcmf_chanspec_list {
@@ -523,6 +567,71 @@ struct brcmf_mbss_ssid_le {
 	__le32	bsscfgidx;
 	__le32	SSID_len;
 	unsigned char SSID[32];
+};
+
+/**
+ * struct brcmf_fil_country_le - country configuration structure.
+ *
+ * @country_abbrev: null-terminated country code used in the country IE.
+ * @rev: revision specifier for ccode. on set, -1 indicates unspecified.
+ * @ccode: null-terminated built-in country code.
+ */
+struct brcmf_fil_country_le {
+	char country_abbrev[BRCMF_COUNTRY_BUF_SZ];
+	__le32 rev;
+	char ccode[BRCMF_COUNTRY_BUF_SZ];
+};
+
+/**
+ * struct brcmf_rev_info_le - device revision info.
+ *
+ * @vendorid: PCI vendor id.
+ * @deviceid: device id of chip.
+ * @radiorev: radio revision.
+ * @chiprev: chip revision.
+ * @corerev: core revision.
+ * @boardid: board identifier (usu. PCI sub-device id).
+ * @boardvendor: board vendor (usu. PCI sub-vendor id).
+ * @boardrev: board revision.
+ * @driverrev: driver version.
+ * @ucoderev: microcode version.
+ * @bus: bus type.
+ * @chipnum: chip number.
+ * @phytype: phy type.
+ * @phyrev: phy revision.
+ * @anarev: anacore rev.
+ * @chippkg: chip package info.
+ * @nvramrev: nvram revision number.
+ */
+struct brcmf_rev_info_le {
+	__le32 vendorid;
+	__le32 deviceid;
+	__le32 radiorev;
+	__le32 chiprev;
+	__le32 corerev;
+	__le32 boardid;
+	__le32 boardvendor;
+	__le32 boardrev;
+	__le32 driverrev;
+	__le32 ucoderev;
+	__le32 bus;
+	__le32 chipnum;
+	__le32 phytype;
+	__le32 phyrev;
+	__le32 anarev;
+	__le32 chippkg;
+	__le32 nvramrev;
+};
+
+/**
+ * struct brcmf_assoclist_le - request assoc list.
+ *
+ * @count: indicates number of stations.
+ * @mac: MAC addresses of stations.
+ */
+struct brcmf_assoclist_le {
+	__le32 count;
+	u8 mac[BRCMF_MAX_ASSOCLIST][ETH_ALEN];
 };
 
 #endif /* FWIL_TYPES_H_ */

@@ -15,6 +15,8 @@
 /dts-v1/;
 #include "exynos3250.dtsi"
 #include <dt-bindings/input/input.h>
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/clock/samsung,s2mps11.h>
 
 / {
 	model = "Samsung Rinato board";
@@ -37,9 +39,7 @@
 		compatible = "gpio-keys";
 
 		power_key {
-			interrupt-parent = <&gpx2>;
-			interrupts = <7 0>;
-			gpios = <&gpx2 7 1>;
+			gpios = <&gpx2 7 GPIO_ACTIVE_LOW>;
 			linux,code = <KEY_POWER>;
 			label = "power key";
 			debounce-interval = <10>;
@@ -49,7 +49,7 @@
 
 	i2c_max77836: i2c-gpio-0 {
 		compatible = "i2c-gpio";
-		gpios = <&gpd0 2 0>, <&gpd0 3 0>;
+		gpios = <&gpd0 2 GPIO_ACTIVE_HIGH>, <&gpd0 3 GPIO_ACTIVE_HIGH>;
 		#address-cells = <1>;
 		#size-cells = <0>;
 
@@ -100,6 +100,28 @@
 			};
 		};
 	};
+
+	haptics {
+		compatible = "regulator-haptic";
+		haptic-supply = <&motor_reg>;
+		min-microvolt = <1100000>;
+		max-microvolt = <2700000>;
+	};
+
+	thermal-zones {
+		cpu_thermal: cpu-thermal {
+			cooling-maps {
+				map0 {
+					/* Corresponds to 500MHz */
+					cooling-device = <&cpu0 5 5>;
+				};
+				map1 {
+					/* Corresponds to 200MHz */
+					cooling-device = <&cpu0 8 8>;
+				};
+			};
+		};
+	};
 };
 
 &adc {
@@ -122,6 +144,92 @@
 		pullup-ohm = <100000>;
 		pulldown-ohm = <100000>;
 		io-channels = <&adc 1>;
+	};
+};
+
+&cpu0 {
+	cpu0-supply = <&buck2_reg>;
+};
+
+&exynos_usbphy {
+	status = "okay";
+	vbus-supply = <&safeout_reg>;
+};
+
+&hsotg {
+	vusb_d-supply = <&ldo15_reg>;
+	vusb_a-supply = <&ldo12_reg>;
+	dr_mode = "peripheral";
+	status = "okay";
+};
+
+&dsi_0 {
+	vddcore-supply = <&ldo6_reg>;
+	vddio-supply = <&ldo6_reg>;
+	samsung,pll-clock-frequency = <24000000>;
+	status = "okay";
+
+	ports {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		port@1 {
+			reg = <1>;
+
+			dsi_out: endpoint {
+				remote-endpoint = <&dsi_in>;
+				samsung,burst-clock-frequency = <250000000>;
+				samsung,esc-clock-frequency = <20000000>;
+			};
+		};
+	};
+
+	panel@0 {
+		compatible = "samsung,s6e63j0x03";
+		reg = <0>;
+		vdd3-supply = <&ldo16_reg>;
+		vci-supply = <&ldo20_reg>;
+		reset-gpios = <&gpe0 1 GPIO_ACTIVE_HIGH>;
+		te-gpios = <&gpx0 6 GPIO_ACTIVE_HIGH>;
+		power-on-delay= <30>;
+		power-off-delay= <120>;
+		reset-delay = <5>;
+		init-delay = <100>;
+		flip-horizontal;
+		flip-vertical;
+		panel-width-mm = <29>;
+		panel-height-mm = <29>;
+
+		display-timings {
+			timing-0 {
+				clock-frequency = <4600000>;
+				hactive = <320>;
+				vactive = <320>;
+				hfront-porch = <1>;
+				hback-porch = <1>;
+				hsync-len = <1>;
+				vfront-porch = <150>;
+				vback-porch = <1>;
+				vsync-len = <2>;
+			};
+		};
+
+		port {
+			dsi_in: endpoint {
+				remote-endpoint = <&dsi_out>;
+			};
+		};
+	};
+};
+
+&fimd {
+	status = "okay";
+
+	i80-if-timings {
+		cs-setup = <0>;
+		wr-setup = <0>;
+		wr-act = <1>;
+		wr-hold = <0>;
 	};
 };
 
@@ -261,14 +369,14 @@
 				regulator-name = "V_EMMC_1.8V";
 				regulator-min-microvolt = <1800000>;
 				regulator-max-microvolt = <1800000>;
-				samsung,ext-control-gpios = <&gpk0 2 0>;
+				samsung,ext-control-gpios = <&gpk0 2 GPIO_ACTIVE_HIGH>;
 			};
 
 			ldo12_reg: LDO12 {
 				regulator-name = "V_EMMC_2.8V";
 				regulator-min-microvolt = <2800000>;
 				regulator-max-microvolt = <2800000>;
-				samsung,ext-control-gpios = <&gpk0 2 0>;
+				samsung,ext-control-gpios = <&gpk0 2 GPIO_ACTIVE_HIGH>;
 			};
 
 			ldo13_reg: LDO13 {
@@ -480,6 +588,10 @@
 	status = "okay";
 };
 
+&jpeg {
+	status = "okay";
+};
+
 &mshc_0 {
 	#address-cells = <1>;
 	#size-cells = <0>;
@@ -518,9 +630,49 @@
 };
 
 &rtc {
-	clocks = <&cmu CLK_RTC>, <&s2mps14_osc 0>;
+	clocks = <&cmu CLK_RTC>, <&s2mps14_osc S2MPS11_CLK_AP>;
 	clock-names = "rtc", "rtc_src";
 	status = "okay";
+};
+
+&ppmu_dmc0 {
+	status = "okay";
+
+	events {
+		ppmu_dmc0_3: ppmu-event3-dmc0 {
+			event-name = "ppmu-event3-dmc0";
+		};
+	};
+};
+
+&ppmu_dmc1 {
+	status = "okay";
+
+	events {
+		ppmu_dmc1_3: ppmu-event3-dmc1 {
+			event-name = "ppmu-event3-dmc1";
+		};
+	};
+};
+
+&ppmu_leftbus {
+	status = "okay";
+
+	events {
+		ppmu_leftbus_3: ppmu-event3-leftbus {
+			event-name = "ppmu-event3-leftbus";
+		};
+	};
+};
+
+&ppmu_rightbus {
+	status = "okay";
+
+	events {
+		ppmu_rightbus_3: ppmu-event3-rightbus {
+			event-name = "ppmu-event3-rightbus";
+		};
+	};
 };
 
 &xusbxti {

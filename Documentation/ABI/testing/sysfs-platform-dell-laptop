@@ -1,4 +1,4 @@
-What:		/sys/class/leds/dell::kbd_backlight/als_setting
+What:		/sys/class/leds/dell::kbd_backlight/als_enabled
 Date:		December 2014
 KernelVersion:	3.19
 Contact:	Gabriele Mazzotta <gabriele.mzt@gmail.com>,
@@ -8,6 +8,15 @@ Description:
 		illumination mode on some systems that have an ambient
 		light sensor. Write 1 to this file to enable the auto
 		mode, 0 to disable it.
+
+What:		/sys/class/leds/dell::kbd_backlight/als_setting
+Date:		December 2014
+KernelVersion:	3.19
+Contact:	Gabriele Mazzotta <gabriele.mzt@gmail.com>,
+		Pali Rohár <pali.rohar@gmail.com>
+Description:
+		This file allows to specifiy the on/off threshold value,
+		as reported by the ambient light sensor.
 
 What:		/sys/class/leds/dell::kbd_backlight/start_triggers
 Date:		December 2014

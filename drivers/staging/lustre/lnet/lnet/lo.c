@@ -47,7 +47,7 @@ lolnd_send(lnet_ni_t *ni, void *private, lnet_msg_t *lntmsg)
 static int
 lolnd_recv(lnet_ni_t *ni, void *private, lnet_msg_t *lntmsg,
 	    int delayed, unsigned int niov,
-	    struct iovec *iov, lnet_kiov_t *kiov,
+	    struct kvec *iov, lnet_kiov_t *kiov,
 	    unsigned int offset, unsigned int mlen, unsigned int rlen)
 {
 	lnet_msg_t *sendmsg = private;
@@ -111,7 +111,7 @@ lnd_t the_lolnd = {
 	/* .lnd_type       = */ LOLND,
 	/* .lnd_startup    = */ lolnd_startup,
 	/* .lnd_shutdown   = */ lolnd_shutdown,
-	/* .lnt_ctl	= */ NULL,
+	/* .lnt_ctl        = */ NULL,
 	/* .lnd_send       = */ lolnd_send,
 	/* .lnd_recv       = */ lolnd_recv,
 	/* .lnd_eager_recv = */ NULL,

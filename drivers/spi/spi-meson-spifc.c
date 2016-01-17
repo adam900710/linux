@@ -85,7 +85,7 @@ struct meson_spifc {
 	struct device *dev;
 };
 
-static struct regmap_config spifc_regmap_config = {
+static const struct regmap_config spifc_regmap_config = {
 	.reg_bits = 32,
 	.val_bits = 32,
 	.reg_stride = 4,
@@ -444,6 +444,7 @@ static const struct of_device_id meson_spifc_dt_match[] = {
 	{ .compatible = "amlogic,meson6-spifc", },
 	{ },
 };
+MODULE_DEVICE_TABLE(of, meson_spifc_dt_match);
 
 static struct platform_driver meson_spifc_driver = {
 	.probe	= meson_spifc_probe,

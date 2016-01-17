@@ -29,7 +29,7 @@
 #include "e1000_mac.h"
 #include "e1000_82575.h"
 
-#include <linux/clocksource.h>
+#include <linux/timecounter.h>
 #include <linux/net_tstamp.h>
 #include <linux/ptp_clock_kernel.h>
 #include <linux/bitops.h>
@@ -343,6 +343,9 @@ struct hwmon_buff {
 	};
 #endif
 
+#define IGB_N_EXTTS	2
+#define IGB_N_PEROUT	2
+#define IGB_N_SDP	4
 #define IGB_RETA_SIZE	128
 
 /* board specific private data structure */
@@ -439,6 +442,12 @@ struct igb_adapter {
 	u32 tx_hwtstamp_timeouts;
 	u32 rx_hwtstamp_cleared;
 
+	struct ptp_pin_desc sdp_config[IGB_N_SDP];
+	struct {
+		struct timespec64 start;
+		struct timespec64 period;
+	} perout[IGB_N_PEROUT];
+
 	char fw_version[32];
 #ifdef CONFIG_IGB_HWMON
 	struct hwmon_buff *igb_hwmon_buff;
@@ -531,6 +540,7 @@ void igb_ptp_rx_pktstamp(struct igb_q_vector *q_vector, unsigned char *va,
 			 struct sk_buff *skb);
 int igb_ptp_set_ts_config(struct net_device *netdev, struct ifreq *ifr);
 int igb_ptp_get_ts_config(struct net_device *netdev, struct ifreq *ifr);
+void igb_set_flag_queue_pairs(struct igb_adapter *, const u32);
 #ifdef CONFIG_IGB_HWMON
 void igb_sysfs_exit(struct igb_adapter *adapter);
 int igb_sysfs_init(struct igb_adapter *adapter);

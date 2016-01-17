@@ -73,6 +73,8 @@ struct btrfs_ordered_sum {
 
 #define BTRFS_ORDERED_LOGGED 10 /* Set when we've waited on this ordered extent
 				 * in the logging code. */
+#define BTRFS_ORDERED_PENDING 11 /* We are waiting for this ordered extent to
+				  * complete in the current transaction. */
 struct btrfs_ordered_extent {
 	/* logical offset in the file */
 	u64 file_offset;
@@ -88,9 +90,6 @@ struct btrfs_ordered_extent {
 
 	/* number of bytes that still need writing */
 	u64 bytes_left;
-
-	/* number of bytes that still need csumming */
-	u64 csum_bytes_left;
 
 	/*
 	 * the end of the ordered extent which is behind it but
@@ -140,6 +139,16 @@ struct btrfs_ordered_extent {
 	struct completion completion;
 	struct btrfs_work flush_work;
 	struct list_head work_list;
+
+	/*
+	 * For inband deduplication
+	 * If hash is NULL, no deduplication.
+	 * If hash->bytenr is zero, means this is a dedup miss, hash will
+	 * be added into dedup tree.
+	 * If hash->bytenr is non-zero, this is a dedup hit. Extent ref is
+	 * *ALREADY* increased.
+	 */
+	struct btrfs_dedup_hash *hash;
 };
 
 /*
@@ -173,6 +182,9 @@ int btrfs_dec_test_first_ordered_pending(struct inode *inode,
 				   int uptodate);
 int btrfs_add_ordered_extent(struct inode *inode, u64 file_offset,
 			     u64 start, u64 len, u64 disk_len, int type);
+int btrfs_add_ordered_extent_dedup(struct inode *inode, u64 file_offset,
+				   u64 start, u64 len, u64 disk_len, int type,
+				   struct btrfs_dedup_hash *hash);
 int btrfs_add_ordered_extent_dio(struct inode *inode, u64 file_offset,
 				 u64 start, u64 len, u64 disk_len, int type);
 int btrfs_add_ordered_extent_compress(struct inode *inode, u64 file_offset,
@@ -191,6 +203,9 @@ btrfs_lookup_first_ordered_extent(struct inode * inode, u64 file_offset);
 struct btrfs_ordered_extent *btrfs_lookup_ordered_range(struct inode *inode,
 							u64 file_offset,
 							u64 len);
+bool btrfs_have_ordered_extents_in_range(struct inode *inode,
+					 u64 file_offset,
+					 u64 len);
 int btrfs_ordered_update_i_size(struct inode *inode, u64 offset,
 				struct btrfs_ordered_extent *ordered);
 int btrfs_find_ordered_sum(struct inode *inode, u64 offset, u64 disk_bytenr,

@@ -73,7 +73,7 @@
 
 #define TIME_WINDOW_MAX_MSEC 40000
 #define TIME_WINDOW_MIN_MSEC 250
-
+#define ENERGY_UNIT_SCALE    1000 /* scale from driver unit to powercap unit */
 enum unit_type {
 	ARBITRARY_UNIT, /* no translation */
 	POWER_UNIT,
@@ -158,6 +158,7 @@ struct rapl_domain {
 	struct rapl_power_limit rpl[NR_POWER_LIMITS];
 	u64 attr_map; /* track capabilities */
 	unsigned int state;
+	unsigned int domain_energy_unit;
 	int package_id;
 };
 #define power_zone_to_rapl_domain(_zone) \
@@ -186,15 +187,18 @@ struct rapl_package {
 };
 
 struct rapl_defaults {
+	u8 floor_freq_reg_addr;
 	int (*check_unit)(struct rapl_package *rp, int cpu);
 	void (*set_floor_freq)(struct rapl_domain *rd, bool mode);
 	u64 (*compute_time_window)(struct rapl_package *rp, u64 val,
 				bool to_raw);
+	unsigned int dram_domain_energy_unit;
 };
 static struct rapl_defaults *rapl_defaults;
 
 /* Sideband MBI registers */
-#define IOSF_CPU_POWER_BUDGET_CTL (0x2)
+#define IOSF_CPU_POWER_BUDGET_CTL_BYT (0x2)
+#define IOSF_CPU_POWER_BUDGET_CTL_TNG (0xdf)
 
 #define PACKAGE_PLN_INT_SAVED   BIT(0)
 #define MAX_PRIM_NAME (32)
@@ -227,7 +231,8 @@ static int rapl_read_data_raw(struct rapl_domain *rd,
 static int rapl_write_data_raw(struct rapl_domain *rd,
 			enum rapl_primitives prim,
 			unsigned long long value);
-static u64 rapl_unit_xlate(int package, enum unit_type type, u64 value,
+static u64 rapl_unit_xlate(struct rapl_domain *rd, int package,
+			enum unit_type type, u64 value,
 			int to_raw);
 static void package_power_limit_irq_save(int package_id);
 
@@ -305,7 +310,9 @@ static int get_energy_counter(struct powercap_zone *power_zone, u64 *energy_raw)
 
 static int get_max_energy_counter(struct powercap_zone *pcd_dev, u64 *energy)
 {
-	*energy = rapl_unit_xlate(0, ENERGY_UNIT, ENERGY_STATUS_MASK, 0);
+	struct rapl_domain *rd = power_zone_to_rapl_domain(pcd_dev);
+
+	*energy = rapl_unit_xlate(rd, 0, ENERGY_UNIT, ENERGY_STATUS_MASK, 0);
 	return 0;
 }
 
@@ -353,7 +360,8 @@ static int set_domain_enable(struct powercap_zone *power_zone, bool mode)
 
 	get_online_cpus();
 	rapl_write_data_raw(rd, PL1_ENABLE, mode);
-	rapl_defaults->set_floor_freq(rd, mode);
+	if (rapl_defaults->set_floor_freq)
+		rapl_defaults->set_floor_freq(rd, mode);
 	put_online_cpus();
 
 	return 0;
@@ -639,6 +647,11 @@ static void rapl_init_domains(struct rapl_package *rp)
 			rd->msrs[4] = MSR_DRAM_POWER_INFO;
 			rd->rpl[0].prim_id = PL1_ENABLE;
 			rd->rpl[0].name = pl1_name;
+			rd->domain_energy_unit =
+				rapl_defaults->dram_domain_energy_unit;
+			if (rd->domain_energy_unit)
+				pr_info("DRAM domain energy unit %dpj\n",
+					rd->domain_energy_unit);
 			break;
 		}
 		if (mask) {
@@ -648,11 +661,13 @@ static void rapl_init_domains(struct rapl_package *rp)
 	}
 }
 
-static u64 rapl_unit_xlate(int package, enum unit_type type, u64 value,
+static u64 rapl_unit_xlate(struct rapl_domain *rd, int package,
+			enum unit_type type, u64 value,
 			int to_raw)
 {
 	u64 units = 1;
 	struct rapl_package *rp;
+	u64 scale = 1;
 
 	rp = find_package_by_id(package);
 	if (!rp)
@@ -663,7 +678,12 @@ static u64 rapl_unit_xlate(int package, enum unit_type type, u64 value,
 		units = rp->power_unit;
 		break;
 	case ENERGY_UNIT:
-		units = rp->energy_unit;
+		scale = ENERGY_UNIT_SCALE;
+		/* per domain unit takes precedence */
+		if (rd && rd->domain_energy_unit)
+			units = rd->domain_energy_unit;
+		else
+			units = rp->energy_unit;
 		break;
 	case TIME_UNIT:
 		return rapl_defaults->compute_time_window(rp, value, to_raw);
@@ -673,11 +693,11 @@ static u64 rapl_unit_xlate(int package, enum unit_type type, u64 value,
 	};
 
 	if (to_raw)
-		return div64_u64(value, units);
+		return div64_u64(value, units) * scale;
 
 	value *= units;
 
-	return value;
+	return div64_u64(value, scale);
 }
 
 /* in the order of enum rapl_primitives */
@@ -773,7 +793,7 @@ static int rapl_read_data_raw(struct rapl_domain *rd,
 	final = value & rp->mask;
 	final = final >> rp->shift;
 	if (xlate)
-		*data = rapl_unit_xlate(rd->package_id, rp->unit, final, 0);
+		*data = rapl_unit_xlate(rd, rd->package_id, rp->unit, final, 0);
 	else
 		*data = final;
 
@@ -799,7 +819,7 @@ static int rapl_write_data_raw(struct rapl_domain *rd,
 			"failed to read msr 0x%x on cpu %d\n", msr, cpu);
 		return -EIO;
 	}
-	value = rapl_unit_xlate(rd->package_id, rp->unit, value, 1);
+	value = rapl_unit_xlate(rd, rd->package_id, rp->unit, value, 1);
 	msr_val &= ~rp->mask;
 	msr_val |= value << rp->shift;
 	if (wrmsrl_safe_on_cpu(cpu, msr, msr_val)) {
@@ -818,7 +838,7 @@ static int rapl_write_data_raw(struct rapl_domain *rd,
  * calculate units differ on different CPUs.
  * We convert the units to below format based on CPUs.
  * i.e.
- * energy unit: microJoules : Represented in microJoules by default
+ * energy unit: picoJoules  : Represented in picoJoules by default
  * power unit : microWatts  : Represented in milliWatts by default
  * time unit  : microseconds: Represented in seconds by default
  */
@@ -834,7 +854,7 @@ static int rapl_check_unit_core(struct rapl_package *rp, int cpu)
 	}
 
 	value = (msr_val & ENERGY_UNIT_MASK) >> ENERGY_UNIT_OFFSET;
-	rp->energy_unit = 1000000 / (1 << value);
+	rp->energy_unit = ENERGY_UNIT_SCALE * 1000000 / (1 << value);
 
 	value = (msr_val & POWER_UNIT_MASK) >> POWER_UNIT_OFFSET;
 	rp->power_unit = 1000000 / (1 << value);
@@ -842,7 +862,7 @@ static int rapl_check_unit_core(struct rapl_package *rp, int cpu)
 	value = (msr_val & TIME_UNIT_MASK) >> TIME_UNIT_OFFSET;
 	rp->time_unit = 1000000 / (1 << value);
 
-	pr_debug("Core CPU package %d energy=%duJ, time=%dus, power=%duW\n",
+	pr_debug("Core CPU package %d energy=%dpJ, time=%dus, power=%duW\n",
 		rp->id, rp->energy_unit, rp->time_unit, rp->power_unit);
 
 	return 0;
@@ -859,7 +879,7 @@ static int rapl_check_unit_atom(struct rapl_package *rp, int cpu)
 		return -ENODEV;
 	}
 	value = (msr_val & ENERGY_UNIT_MASK) >> ENERGY_UNIT_OFFSET;
-	rp->energy_unit = 1 << value;
+	rp->energy_unit = ENERGY_UNIT_SCALE * 1 << value;
 
 	value = (msr_val & POWER_UNIT_MASK) >> POWER_UNIT_OFFSET;
 	rp->power_unit = (1 << value) * 1000;
@@ -867,7 +887,7 @@ static int rapl_check_unit_atom(struct rapl_package *rp, int cpu)
 	value = (msr_val & TIME_UNIT_MASK) >> TIME_UNIT_OFFSET;
 	rp->time_unit = 1000000 / (1 << value);
 
-	pr_debug("Atom package %d energy=%duJ, time=%dus, power=%duW\n",
+	pr_debug("Atom package %d energy=%dpJ, time=%dus, power=%duW\n",
 		rp->id, rp->energy_unit, rp->time_unit, rp->power_unit);
 
 	return 0;
@@ -962,16 +982,22 @@ static void set_floor_freq_atom(struct rapl_domain *rd, bool enable)
 	static u32 power_ctrl_orig_val;
 	u32 mdata;
 
+	if (!rapl_defaults->floor_freq_reg_addr) {
+		pr_err("Invalid floor frequency config register\n");
+		return;
+	}
+
 	if (!power_ctrl_orig_val)
 		iosf_mbi_read(BT_MBI_UNIT_PMC, BT_MBI_PMC_READ,
-			IOSF_CPU_POWER_BUDGET_CTL, &power_ctrl_orig_val);
+			rapl_defaults->floor_freq_reg_addr,
+				&power_ctrl_orig_val);
 	mdata = power_ctrl_orig_val;
 	if (enable) {
 		mdata &= ~(0x7f << 8);
 		mdata |= 1 << 8;
 	}
 	iosf_mbi_write(BT_MBI_UNIT_PMC, BT_MBI_PMC_WRITE,
-		IOSF_CPU_POWER_BUDGET_CTL, mdata);
+		rapl_defaults->floor_freq_reg_addr, mdata);
 }
 
 static u64 rapl_compute_time_window_core(struct rapl_package *rp, u64 value,
@@ -1012,14 +1038,44 @@ static u64 rapl_compute_time_window_atom(struct rapl_package *rp, u64 value,
 }
 
 static const struct rapl_defaults rapl_defaults_core = {
+	.floor_freq_reg_addr = 0,
 	.check_unit = rapl_check_unit_core,
 	.set_floor_freq = set_floor_freq_default,
 	.compute_time_window = rapl_compute_time_window_core,
 };
 
-static const struct rapl_defaults rapl_defaults_atom = {
+static const struct rapl_defaults rapl_defaults_hsw_server = {
+	.check_unit = rapl_check_unit_core,
+	.set_floor_freq = set_floor_freq_default,
+	.compute_time_window = rapl_compute_time_window_core,
+	.dram_domain_energy_unit = 15300,
+};
+
+static const struct rapl_defaults rapl_defaults_byt = {
+	.floor_freq_reg_addr = IOSF_CPU_POWER_BUDGET_CTL_BYT,
 	.check_unit = rapl_check_unit_atom,
 	.set_floor_freq = set_floor_freq_atom,
+	.compute_time_window = rapl_compute_time_window_atom,
+};
+
+static const struct rapl_defaults rapl_defaults_tng = {
+	.floor_freq_reg_addr = IOSF_CPU_POWER_BUDGET_CTL_TNG,
+	.check_unit = rapl_check_unit_atom,
+	.set_floor_freq = set_floor_freq_atom,
+	.compute_time_window = rapl_compute_time_window_atom,
+};
+
+static const struct rapl_defaults rapl_defaults_ann = {
+	.floor_freq_reg_addr = 0,
+	.check_unit = rapl_check_unit_atom,
+	.set_floor_freq = NULL,
+	.compute_time_window = rapl_compute_time_window_atom,
+};
+
+static const struct rapl_defaults rapl_defaults_cht = {
+	.floor_freq_reg_addr = 0,
+	.check_unit = rapl_check_unit_atom,
+	.set_floor_freq = NULL,
 	.compute_time_window = rapl_compute_time_window_atom,
 };
 
@@ -1030,19 +1086,25 @@ static const struct rapl_defaults rapl_defaults_atom = {
 		.driver_data = (kernel_ulong_t)&_ops,	\
 		}
 
-static const struct x86_cpu_id rapl_ids[] = {
+static const struct x86_cpu_id rapl_ids[] __initconst = {
 	RAPL_CPU(0x2a, rapl_defaults_core),/* Sandy Bridge */
 	RAPL_CPU(0x2d, rapl_defaults_core),/* Sandy Bridge EP */
-	RAPL_CPU(0x37, rapl_defaults_atom),/* Valleyview */
+	RAPL_CPU(0x37, rapl_defaults_byt),/* Valleyview */
 	RAPL_CPU(0x3a, rapl_defaults_core),/* Ivy Bridge */
 	RAPL_CPU(0x3c, rapl_defaults_core),/* Haswell */
 	RAPL_CPU(0x3d, rapl_defaults_core),/* Broadwell */
-	RAPL_CPU(0x3f, rapl_defaults_core),/* Haswell */
+	RAPL_CPU(0x3f, rapl_defaults_hsw_server),/* Haswell servers */
+	RAPL_CPU(0x4f, rapl_defaults_hsw_server),/* Broadwell servers */
 	RAPL_CPU(0x45, rapl_defaults_core),/* Haswell ULT */
-	RAPL_CPU(0x4C, rapl_defaults_atom),/* Braswell */
-	RAPL_CPU(0x4A, rapl_defaults_atom),/* Tangier */
+	RAPL_CPU(0x47, rapl_defaults_core),/* Broadwell-H */
+	RAPL_CPU(0x4E, rapl_defaults_core),/* Skylake */
+	RAPL_CPU(0x4C, rapl_defaults_cht),/* Braswell/Cherryview */
+	RAPL_CPU(0x4A, rapl_defaults_tng),/* Tangier */
 	RAPL_CPU(0x56, rapl_defaults_core),/* Future Xeon */
-	RAPL_CPU(0x5A, rapl_defaults_atom),/* Annidale */
+	RAPL_CPU(0x5A, rapl_defaults_ann),/* Annidale */
+	RAPL_CPU(0X5C, rapl_defaults_core),/* Broxton */
+	RAPL_CPU(0x5E, rapl_defaults_core),/* Skylake-H/S */
+	RAPL_CPU(0x57, rapl_defaults_hsw_server),/* Knights Landing */
 	{}
 };
 MODULE_DEVICE_TABLE(x86cpu, rapl_ids);
@@ -1086,9 +1148,11 @@ static int rapl_unregister_powercap(void)
 			pr_debug("remove package, undo power limit on %d: %s\n",
 				rp->id, rd->name);
 			rapl_write_data_raw(rd, PL1_ENABLE, 0);
-			rapl_write_data_raw(rd, PL2_ENABLE, 0);
 			rapl_write_data_raw(rd, PL1_CLAMP, 0);
-			rapl_write_data_raw(rd, PL2_CLAMP, 0);
+			if (find_nr_power_limit(rd) > 1) {
+				rapl_write_data_raw(rd, PL2_ENABLE, 0);
+				rapl_write_data_raw(rd, PL2_CLAMP, 0);
+			}
 			if (rd->id == RAPL_DOMAIN_PACKAGE) {
 				rd_package = rd;
 				continue;
@@ -1277,10 +1341,13 @@ static int rapl_detect_domains(struct rapl_package *rp, int cpu)
 
 	for (rd = rp->domains; rd < rp->domains + rp->nr_domains; rd++) {
 		/* check if the domain is locked by BIOS */
-		if (rapl_read_data_raw(rd, FW_LOCK, false, &locked)) {
+		ret = rapl_read_data_raw(rd, FW_LOCK, false, &locked);
+		if (ret)
+			return ret;
+		if (locked) {
 			pr_info("RAPL package %d domain %s locked by BIOS\n",
 				rp->id, rd->name);
-				rd->state |= DOMAIN_STATE_BIOS_LOCKED;
+			rd->state |= DOMAIN_STATE_BIOS_LOCKED;
 		}
 	}
 

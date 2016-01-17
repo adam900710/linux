@@ -190,7 +190,7 @@ static ssize_t gpio_keys_attr_show_helper(struct gpio_keys_drvdata *ddata,
 		__set_bit(bdata->button->code, bits);
 	}
 
-	ret = bitmap_scnlistprintf(buf, PAGE_SIZE - 2, bits, n_events);
+	ret = scnprintf(buf, PAGE_SIZE - 1, "%*pbl", n_events, bits);
 	buf[ret++] = '\n';
 	buf[ret] = '\0';
 
@@ -237,6 +237,11 @@ static ssize_t gpio_keys_attr_store_helper(struct gpio_keys_drvdata *ddata,
 			error = -EINVAL;
 			goto out;
 		}
+	}
+
+	if (i == ddata->pdata->nbuttons) {
+		error = -EINVAL;
+		goto out;
 	}
 
 	mutex_lock(&ddata->disable_lock);
@@ -336,8 +341,14 @@ static void gpio_keys_gpio_report_event(struct gpio_button_data *bdata)
 	const struct gpio_keys_button *button = bdata->button;
 	struct input_dev *input = bdata->input;
 	unsigned int type = button->type ?: EV_KEY;
-	int state = (gpio_get_value_cansleep(button->gpio) ? 1 : 0) ^ button->active_low;
+	int state = gpio_get_value_cansleep(button->gpio);
 
+	if (state < 0) {
+		dev_err(input->dev.parent, "failed to get gpio state\n");
+		return;
+	}
+
+	state = (state ? 1 : 0) ^ button->active_low;
 	if (type == EV_ABS) {
 		if (state)
 			input_event(input, type, button->code, button->value);
@@ -655,7 +666,9 @@ gpio_keys_get_devtree_pdata(struct device *dev)
 		if (of_property_read_u32(pp, "linux,input-type", &button->type))
 			button->type = EV_KEY;
 
-		button->wakeup = !!of_get_property(pp, "gpio-key,wakeup", NULL);
+		button->wakeup = of_property_read_bool(pp, "wakeup-source") ||
+				 /* legacy name */
+				 of_property_read_bool(pp, "gpio-key,wakeup");
 
 		button->can_disable = !!of_get_property(pp, "linux,can-disable", NULL);
 

@@ -31,7 +31,7 @@ init_stream(struct snd_efw *efw, struct amdtp_stream *stream)
 	if (err < 0)
 		goto end;
 
-	err = amdtp_stream_init(stream, efw->unit, s_dir, CIP_BLOCKING);
+	err = amdtp_am824_init(stream, efw->unit, s_dir, CIP_BLOCKING);
 	if (err < 0) {
 		amdtp_stream_destroy(stream);
 		cmp_connection_destroy(conn);
@@ -73,8 +73,10 @@ start_stream(struct snd_efw *efw, struct amdtp_stream *stream,
 		midi_ports = efw->midi_in_ports;
 	}
 
-	amdtp_stream_set_parameters(stream, sampling_rate,
-				    pcm_channels, midi_ports);
+	err = amdtp_am824_set_parameters(stream, sampling_rate,
+					 pcm_channels, midi_ports, false);
+	if (err < 0)
+		goto end;
 
 	/*  establish connection via CMP */
 	err = cmp_connection_establish(conn,
@@ -100,17 +102,22 @@ end:
 	return err;
 }
 
+/*
+ * This function should be called before starting the stream or after stopping
+ * the streams.
+ */
 static void
 destroy_stream(struct snd_efw *efw, struct amdtp_stream *stream)
 {
-	stop_stream(efw, stream);
-
-	amdtp_stream_destroy(stream);
+	struct cmp_connection *conn;
 
 	if (stream == &efw->tx_stream)
-		cmp_connection_destroy(&efw->out_conn);
+		conn = &efw->out_conn;
 	else
-		cmp_connection_destroy(&efw->in_conn);
+		conn = &efw->in_conn;
+
+	amdtp_stream_destroy(stream);
+	cmp_connection_destroy(&efw->out_conn);
 }
 
 static int
@@ -167,6 +174,15 @@ int snd_efw_stream_init_duplex(struct snd_efw *efw)
 	efw->tx_stream.flags |= CIP_DBC_IS_END_EVENT;
 	/* Fireworks reset dbc at bus reset. */
 	efw->tx_stream.flags |= CIP_SKIP_DBC_ZERO_CHECK;
+	/*
+	 * But Recent firmwares starts packets with non-zero dbc.
+	 * Driver version 5.7.6 installs firmware version 5.7.3.
+	 */
+	if (efw->is_fireworks3 &&
+	    (efw->firmware_version == 0x5070000 ||
+	     efw->firmware_version == 0x5070300 ||
+	     efw->firmware_version == 0x5080000))
+		efw->tx_stream.tx_first_dbc = 0x02;
 	/* AudioFire9 always reports wrong dbs. */
 	if (efw->is_af9)
 		efw->tx_stream.flags |= CIP_WRONG_DBS;
@@ -319,12 +335,8 @@ void snd_efw_stream_update_duplex(struct snd_efw *efw)
 
 void snd_efw_stream_destroy_duplex(struct snd_efw *efw)
 {
-	mutex_lock(&efw->mutex);
-
 	destroy_stream(efw, &efw->rx_stream);
 	destroy_stream(efw, &efw->tx_stream);
-
-	mutex_unlock(&efw->mutex);
 }
 
 void snd_efw_stream_lock_changed(struct snd_efw *efw)

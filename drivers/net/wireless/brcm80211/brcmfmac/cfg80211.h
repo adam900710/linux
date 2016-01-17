@@ -75,6 +75,8 @@
 
 #define BRCMF_VNDR_IE_P2PAF_SHIFT	12
 
+#define BRCMF_MAX_DEFAULT_KEYS		4
+
 
 /**
  * enum brcmf_scan_status - scan engine status
@@ -125,11 +127,13 @@ struct brcmf_cfg80211_security {
  * @ssid: ssid of associated/associating ap.
  * @bssid: bssid of joined/joining ibss.
  * @sec: security information.
+ * @key: key information
  */
 struct brcmf_cfg80211_profile {
 	struct brcmf_ssid ssid;
 	u8 bssid[ETH_ALEN];
 	struct brcmf_cfg80211_security sec;
+	struct brcmf_wsec_key key[BRCMF_MAX_DEFAULT_KEYS];
 };
 
 /**
@@ -139,7 +143,6 @@ struct brcmf_cfg80211_profile {
  * @BRCMF_VIF_STATUS_CONNECTING: connect/join in progress.
  * @BRCMF_VIF_STATUS_CONNECTED: connected/joined succesfully.
  * @BRCMF_VIF_STATUS_DISCONNECTING: disconnect/disable in progress.
- * @BRCMF_VIF_STATUS_AP_CREATING: interface configured for AP operation.
  * @BRCMF_VIF_STATUS_AP_CREATED: AP operation started.
  */
 enum brcmf_vif_status {
@@ -147,7 +150,6 @@ enum brcmf_vif_status {
 	BRCMF_VIF_STATUS_CONNECTING,
 	BRCMF_VIF_STATUS_CONNECTED,
 	BRCMF_VIF_STATUS_DISCONNECTING,
-	BRCMF_VIF_STATUS_AP_CREATING,
 	BRCMF_VIF_STATUS_AP_CREATED
 };
 
@@ -196,6 +198,7 @@ struct brcmf_cfg80211_vif {
 	struct list_head list;
 	u16 mgmt_rx_reg;
 	bool mbss;
+	int is_11d;
 };
 
 /* association inform */
@@ -402,6 +405,7 @@ struct brcmf_cfg80211_info {
 	struct brcmu_d11inf d11inf;
 	bool wowl_enabled;
 	u32 pre_wowl_pmmode;
+	struct brcmf_assoclist_le assoclist;
 };
 
 /**
@@ -464,7 +468,8 @@ brcmf_cfg80211_connect_info *cfg_to_conn(struct brcmf_cfg80211_info *cfg)
 }
 
 struct brcmf_cfg80211_info *brcmf_cfg80211_attach(struct brcmf_pub *drvr,
-						  struct device *busdev);
+						  struct device *busdev,
+						  bool p2pdev_forced);
 void brcmf_cfg80211_detach(struct brcmf_cfg80211_info *cfg);
 s32 brcmf_cfg80211_up(struct net_device *ndev);
 s32 brcmf_cfg80211_down(struct net_device *ndev);

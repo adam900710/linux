@@ -229,9 +229,7 @@ static int snd_aw2_dev_free(struct snd_device *device)
 	if (chip->irq >= 0)
 		free_irq(chip->irq, (void *)chip);
 	/* release the i/o ports & memory */
-	if (chip->iobase_virt)
-		iounmap(chip->iobase_virt);
-
+	iounmap(chip->iobase_virt);
 	pci_release_regions(chip->pci);
 	/* disable the PCI entry */
 	pci_disable_device(chip->pci);
@@ -260,8 +258,8 @@ static int snd_aw2_create(struct snd_card *card,
 	pci_set_master(pci);
 
 	/* check PCI availability (32bit DMA) */
-	if ((pci_set_dma_mask(pci, DMA_BIT_MASK(32)) < 0) ||
-	    (pci_set_consistent_dma_mask(pci, DMA_BIT_MASK(32)) < 0)) {
+	if ((dma_set_mask(&pci->dev, DMA_BIT_MASK(32)) < 0) ||
+	    (dma_set_coherent_mask(&pci->dev, DMA_BIT_MASK(32)) < 0)) {
 		dev_err(card->dev, "Impossible to set 32bit mask DMA\n");
 		pci_disable_device(pci);
 		return -ENXIO;

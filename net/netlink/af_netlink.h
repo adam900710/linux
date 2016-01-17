@@ -35,6 +35,7 @@ struct netlink_sock {
 	unsigned long		state;
 	size_t			max_recvmsg_len;
 	wait_queue_head_t	wait;
+	bool			bound;
 	bool			cb_running;
 	struct netlink_callback	cb;
 	struct mutex		*cb_mutex;
@@ -51,11 +52,21 @@ struct netlink_sock {
 #endif /* CONFIG_NETLINK_MMAP */
 
 	struct rhash_head	node;
+	struct rcu_head		rcu;
 };
 
 static inline struct netlink_sock *nlk_sk(struct sock *sk)
 {
 	return container_of(sk, struct netlink_sock, sk);
+}
+
+static inline bool netlink_skb_is_mmaped(const struct sk_buff *skb)
+{
+#ifdef CONFIG_NETLINK_MMAP
+	return NETLINK_CB(skb).flags & NETLINK_SKB_MMAPED;
+#else
+	return false;
+#endif /* CONFIG_NETLINK_MMAP */
 }
 
 struct netlink_table {
@@ -74,6 +85,5 @@ struct netlink_table {
 
 extern struct netlink_table *nl_table;
 extern rwlock_t nl_table_lock;
-extern struct mutex nl_sk_hash_lock;
 
 #endif

@@ -590,7 +590,7 @@ static inline void wd719x_interrupt_SCB(struct wd719x *wd,
 		dev_dbg(&wd->pdev->dev, "selection timeout\n");
 		break;
 	case WD719X_SUE_RESET:
-		dev_dbg(&wd->pdev->dev, "bus reset occured\n");
+		dev_dbg(&wd->pdev->dev, "bus reset occurred\n");
 		result = DID_RESET;
 		break;
 	case WD719X_SUE_BUSERROR:
@@ -870,6 +870,7 @@ fail_free_params:
 }
 
 static struct scsi_host_template wd719x_template = {
+	.module				= THIS_MODULE,
 	.name				= "Western Digital 719x",
 	.queuecommand			= wd719x_queuecommand,
 	.eh_abort_handler		= wd719x_abort,
@@ -881,7 +882,6 @@ static struct scsi_host_template wd719x_template = {
 	.can_queue			= 255,
 	.this_id			= 7,
 	.sg_tablesize			= WD719X_SG,
-	.cmd_per_lun			= WD719X_CMD_PER_LUN,
 	.use_clustering			= ENABLE_CLUSTERING,
 };
 

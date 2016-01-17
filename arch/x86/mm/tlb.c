@@ -14,9 +14,6 @@
 #include <asm/uv/uv.h>
 #include <linux/debugfs.h>
 
-DEFINE_PER_CPU_SHARED_ALIGNED(struct tlb_state, cpu_tlbstate)
-			= { &init_mm, 0, };
-
 /*
  *	Smarter SMP flushing macros.
  *		c/o Linus Torvalds.
@@ -120,7 +117,7 @@ static void flush_tlb_func(void *info)
 		} else {
 			unsigned long addr;
 			unsigned long nr_pages =
-				f->flush_end - f->flush_start / PAGE_SIZE;
+				(f->flush_end - f->flush_start) / PAGE_SIZE;
 			addr = f->flush_start;
 			while (addr < f->flush_end) {
 				__flush_tlb_single(addr);
@@ -143,6 +140,7 @@ void native_flush_tlb_others(const struct cpumask *cpumask,
 	info.flush_end = end;
 
 	count_vm_tlb_event(NR_TLB_REMOTE_FLUSH);
+	trace_tlb_flush(TLB_REMOTE_SEND_IPI, end - start);
 	if (is_uv_system()) {
 		unsigned int cpu;
 

@@ -56,7 +56,7 @@
  * Generic information about the driver.
  */
 #define DRV_VERSION "2.0.0-ko"
-#define DRV_DESC "Chelsio T4/T5 Virtual Function (VF) Network Driver"
+#define DRV_DESC "Chelsio T4/T5/T6 Virtual Function (VF) Network Driver"
 
 /*
  * Module Parameters.
@@ -380,9 +380,9 @@ static void qenable(struct sge_rspq *rspq)
 	 * enable interrupts.
 	 */
 	t4_write_reg(rspq->adapter, T4VF_SGE_BASE_ADDR + SGE_VF_GTS,
-		     CIDXINC(0) |
-		     SEINTARM(rspq->intr_params) |
-		     INGRESSQID(rspq->cntxt_id));
+		     CIDXINC_V(0) |
+		     SEINTARM_V(rspq->intr_params) |
+		     INGRESSQID_V(rspq->cntxt_id));
 }
 
 /*
@@ -403,9 +403,9 @@ static void enable_rx(struct adapter *adapter)
 	 */
 	if (adapter->flags & USING_MSI)
 		t4_write_reg(adapter, T4VF_SGE_BASE_ADDR + SGE_VF_GTS,
-			     CIDXINC(0) |
-			     SEINTARM(s->intrq.intr_params) |
-			     INGRESSQID(s->intrq.cntxt_id));
+			     CIDXINC_V(0) |
+			     SEINTARM_V(s->intrq.intr_params) |
+			     INGRESSQID_V(s->intrq.cntxt_id));
 
 }
 
@@ -450,7 +450,7 @@ static int fwevtq_handler(struct sge_rspq *rspq, const __be64 *rsp,
 		/* FW can send EGR_UPDATEs encapsulated in a CPL_FW4_MSG.
 		 */
 		const struct cpl_sge_egr_update *p = (void *)(rsp + 3);
-		opcode = G_CPL_OPCODE(ntohl(p->opcode_qid));
+		opcode = CPL_OPCODE_G(ntohl(p->opcode_qid));
 		if (opcode != CPL_SGE_EGR_UPDATE) {
 			dev_err(adapter->pdev_dev, "unexpected FW4/CPL %#x on FW event queue\n"
 				, opcode);
@@ -471,7 +471,7 @@ static int fwevtq_handler(struct sge_rspq *rspq, const __be64 *rsp,
 		 * free TX Queue Descriptors ...
 		 */
 		const struct cpl_sge_egr_update *p = cpl;
-		unsigned int qid = EGR_QID(be32_to_cpu(p->opcode_qid));
+		unsigned int qid = EGR_QID_G(be32_to_cpu(p->opcode_qid));
 		struct sge *s = &adapter->sge;
 		struct sge_txq *tq;
 		struct sge_eth_txq *txq;
@@ -1021,7 +1021,7 @@ static int closest_thres(const struct sge *s, int thres)
 static unsigned int qtimer_val(const struct adapter *adapter,
 			       const struct sge_rspq *rspq)
 {
-	unsigned int timer_idx = QINTR_TIMER_IDX_GET(rspq->intr_params);
+	unsigned int timer_idx = QINTR_TIMER_IDX_G(rspq->intr_params);
 
 	return timer_idx < SGE_NTIMERS
 		? adapter->sge.timer_val[timer_idx]
@@ -1086,8 +1086,8 @@ static int set_rxq_intr_params(struct adapter *adapter, struct sge_rspq *rspq,
 	 * Update the response queue's interrupt coalescing parameters and
 	 * return success.
 	 */
-	rspq->intr_params = (QINTR_TIMER_IDX(timer_idx) |
-			     (cnt > 0 ? QINTR_CNT_EN : 0));
+	rspq->intr_params = (QINTR_TIMER_IDX_V(timer_idx) |
+			     QINTR_CNT_EN_V(cnt > 0));
 	return 0;
 }
 
@@ -1439,7 +1439,7 @@ static int cxgb4vf_get_coalesce(struct net_device *dev,
 
 	coalesce->rx_coalesce_usecs = qtimer_val(adapter, rspq);
 	coalesce->rx_max_coalesced_frames =
-		((rspq->intr_params & QINTR_CNT_EN)
+		((rspq->intr_params & QINTR_CNT_EN_F)
 		 ? adapter->sge.counter_val[rspq->pktcnt_idx]
 		 : 0);
 	return 0;
@@ -1673,7 +1673,7 @@ static void cxgb4vf_get_regs(struct net_device *dev,
 	reg_block_dump(adapter, regbuf,
 		       T4VF_PL_BASE_ADDR + T4VF_MOD_MAP_PL_FIRST,
 		       T4VF_PL_BASE_ADDR + (is_t4(adapter->params.chip)
-		       ? A_PL_VF_WHOAMI : A_PL_VF_REVISION));
+		       ? PL_VF_WHOAMI_A : PL_VF_REVISION_A));
 	reg_block_dump(adapter, regbuf,
 		       T4VF_CIM_BASE_ADDR + T4VF_MOD_MAP_CIM_FIRST,
 		       T4VF_CIM_BASE_ADDR + T4VF_MOD_MAP_CIM_LAST);
@@ -2294,26 +2294,22 @@ static int adap_init0(struct adapter *adapter)
 	 * threshold values from the SGE parameters.
 	 */
 	s->timer_val[0] = core_ticks_to_us(adapter,
-		TIMERVALUE0_GET(sge_params->sge_timer_value_0_and_1));
+		TIMERVALUE0_G(sge_params->sge_timer_value_0_and_1));
 	s->timer_val[1] = core_ticks_to_us(adapter,
-		TIMERVALUE1_GET(sge_params->sge_timer_value_0_and_1));
+		TIMERVALUE1_G(sge_params->sge_timer_value_0_and_1));
 	s->timer_val[2] = core_ticks_to_us(adapter,
-		TIMERVALUE0_GET(sge_params->sge_timer_value_2_and_3));
+		TIMERVALUE0_G(sge_params->sge_timer_value_2_and_3));
 	s->timer_val[3] = core_ticks_to_us(adapter,
-		TIMERVALUE1_GET(sge_params->sge_timer_value_2_and_3));
+		TIMERVALUE1_G(sge_params->sge_timer_value_2_and_3));
 	s->timer_val[4] = core_ticks_to_us(adapter,
-		TIMERVALUE0_GET(sge_params->sge_timer_value_4_and_5));
+		TIMERVALUE0_G(sge_params->sge_timer_value_4_and_5));
 	s->timer_val[5] = core_ticks_to_us(adapter,
-		TIMERVALUE1_GET(sge_params->sge_timer_value_4_and_5));
+		TIMERVALUE1_G(sge_params->sge_timer_value_4_and_5));
 
-	s->counter_val[0] =
-		THRESHOLD_0_GET(sge_params->sge_ingress_rx_threshold);
-	s->counter_val[1] =
-		THRESHOLD_1_GET(sge_params->sge_ingress_rx_threshold);
-	s->counter_val[2] =
-		THRESHOLD_2_GET(sge_params->sge_ingress_rx_threshold);
-	s->counter_val[3] =
-		THRESHOLD_3_GET(sge_params->sge_ingress_rx_threshold);
+	s->counter_val[0] = THRESHOLD_0_G(sge_params->sge_ingress_rx_threshold);
+	s->counter_val[1] = THRESHOLD_1_G(sge_params->sge_ingress_rx_threshold);
+	s->counter_val[2] = THRESHOLD_2_G(sge_params->sge_ingress_rx_threshold);
+	s->counter_val[3] = THRESHOLD_3_G(sge_params->sge_ingress_rx_threshold);
 
 	/*
 	 * Grab our Virtual Interface resource allocation, extract the
@@ -2397,8 +2393,9 @@ static inline void init_rspq(struct sge_rspq *rspq, u8 timer_idx,
 			     u8 pkt_cnt_idx, unsigned int size,
 			     unsigned int iqe_size)
 {
-	rspq->intr_params = (QINTR_TIMER_IDX(timer_idx) |
-			     (pkt_cnt_idx < SGE_NCOUNTERS ? QINTR_CNT_EN : 0));
+	rspq->intr_params = (QINTR_TIMER_IDX_V(timer_idx) |
+			     (pkt_cnt_idx < SGE_NCOUNTERS ?
+			      QINTR_CNT_EN_F : 0));
 	rspq->pktcnt_idx = (pkt_cnt_idx < SGE_NCOUNTERS
 			    ? pkt_cnt_idx
 			    : 0);
@@ -3038,7 +3035,7 @@ static void cxgb4vf_pci_shutdown(struct pci_dev *pdev)
 /* Macros needed to support the PCI Device ID Table ...
  */
 #define CH_PCI_DEVICE_ID_TABLE_DEFINE_BEGIN \
-	static struct pci_device_id cxgb4vf_pci_tbl[] = {
+	static const struct pci_device_id cxgb4vf_pci_tbl[] = {
 #define CH_PCI_DEVICE_ID_FUNCTION	0x8
 
 #define CH_PCI_ID_TABLE_ENTRY(devid) \

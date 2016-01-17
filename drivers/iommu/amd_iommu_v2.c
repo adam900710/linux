@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2010-2012 Advanced Micro Devices, Inc.
- * Author: Joerg Roedel <joerg.roedel@amd.com>
+ * Author: Joerg Roedel <jroedel@suse.de>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 as published
@@ -31,7 +31,7 @@
 #include "amd_iommu_proto.h"
 
 MODULE_LICENSE("GPL v2");
-MODULE_AUTHOR("Joerg Roedel <joerg.roedel@amd.com>");
+MODULE_AUTHOR("Joerg Roedel <jroedel@suse.de>");
 
 #define MAX_DEVICES		0x10000
 #define PRI_QUEUE_SIZE		512
@@ -132,11 +132,19 @@ static struct device_state *get_device_state(u16 devid)
 
 static void free_device_state(struct device_state *dev_state)
 {
+	struct iommu_group *group;
+
 	/*
 	 * First detach device from domain - No more PRI requests will arrive
 	 * from that device after it is unbound from the IOMMUv2 domain.
 	 */
-	iommu_detach_device(dev_state->domain, &dev_state->pdev->dev);
+	group = iommu_group_get(&dev_state->pdev->dev);
+	if (WARN_ON(!group))
+		return;
+
+	iommu_detach_group(dev_state->domain, group);
+
+	iommu_group_put(group);
 
 	/* Everything is down now, free the IOMMUv2 domain */
 	iommu_domain_free(dev_state->domain);
@@ -149,18 +157,6 @@ static void put_device_state(struct device_state *dev_state)
 {
 	if (atomic_dec_and_test(&dev_state->count))
 		wake_up(&dev_state->wq);
-}
-
-static void put_device_state_wait(struct device_state *dev_state)
-{
-	DEFINE_WAIT(wait);
-
-	prepare_to_wait(&dev_state->wq, &wait, TASK_UNINTERRUPTIBLE);
-	if (!atomic_dec_and_test(&dev_state->count))
-		schedule();
-	finish_wait(&dev_state->wq, &wait);
-
-	free_device_state(dev_state);
 }
 
 /* Must be called under dev_state->lock */
@@ -278,14 +274,8 @@ static void put_pasid_state(struct pasid_state *pasid_state)
 
 static void put_pasid_state_wait(struct pasid_state *pasid_state)
 {
-	DEFINE_WAIT(wait);
-
-	prepare_to_wait(&pasid_state->wq, &wait, TASK_UNINTERRUPTIBLE);
-
-	if (!atomic_dec_and_test(&pasid_state->count))
-		schedule();
-
-	finish_wait(&pasid_state->wq, &wait);
+	atomic_dec(&pasid_state->count);
+	wait_event(pasid_state->wq, !atomic_read(&pasid_state->count));
 	free_pasid_state(pasid_state);
 }
 
@@ -366,8 +356,8 @@ static void free_pasid_states(struct device_state *dev_state)
 		free_pasid_states_level2(dev_state->states);
 	else if (dev_state->pasid_levels == 1)
 		free_pasid_states_level1(dev_state->states);
-	else if (dev_state->pasid_levels != 0)
-		BUG();
+	else
+		BUG_ON(dev_state->pasid_levels != 0);
 
 	free_page((unsigned long)dev_state->states);
 }
@@ -436,7 +426,7 @@ static void mn_release(struct mmu_notifier *mn, struct mm_struct *mm)
 	dev_state      = pasid_state->device_state;
 	run_inv_ctx_cb = !pasid_state->invalid;
 
-	if (run_inv_ctx_cb && pasid_state->device_state->inv_ctx_cb)
+	if (run_inv_ctx_cb && dev_state->inv_ctx_cb)
 		dev_state->inv_ctx_cb(dev_state->pdev, pasid_state->pasid);
 
 	unbind_pasid(pasid_state);
@@ -504,6 +494,22 @@ static void handle_fault_error(struct fault *fault)
 	}
 }
 
+static bool access_error(struct vm_area_struct *vma, struct fault *fault)
+{
+	unsigned long requested = 0;
+
+	if (fault->flags & PPR_FAULT_EXEC)
+		requested |= VM_EXEC;
+
+	if (fault->flags & PPR_FAULT_READ)
+		requested |= VM_READ;
+
+	if (fault->flags & PPR_FAULT_WRITE)
+		requested |= VM_WRITE;
+
+	return (requested & ~vma->vm_flags) != 0;
+}
+
 static void do_fault(struct work_struct *work)
 {
 	struct fault *fault = container_of(work, struct fault, work);
@@ -521,6 +527,13 @@ static void do_fault(struct work_struct *work)
 	vma = find_extend_vma(mm, address);
 	if (!vma || address < vma->vm_start) {
 		/* failed to get a vma in the right range */
+		up_read(&mm->mmap_sem);
+		handle_fault_error(fault);
+		goto out;
+	}
+
+	/* Check if we have the right permissions on the vma */
+	if (access_error(vma, fault)) {
 		up_read(&mm->mmap_sem);
 		handle_fault_error(fault);
 		goto out;
@@ -749,6 +762,7 @@ EXPORT_SYMBOL(amd_iommu_unbind_pasid);
 int amd_iommu_init_device(struct pci_dev *pdev, int pasids)
 {
 	struct device_state *dev_state;
+	struct iommu_group *group;
 	unsigned long flags;
 	int ret, tmp;
 	u16 devid;
@@ -794,9 +808,15 @@ int amd_iommu_init_device(struct pci_dev *pdev, int pasids)
 	if (ret)
 		goto out_free_domain;
 
-	ret = iommu_attach_device(dev_state->domain, &pdev->dev);
-	if (ret != 0)
+	group = iommu_group_get(&pdev->dev);
+	if (!group)
 		goto out_free_domain;
+
+	ret = iommu_attach_group(dev_state->domain, group);
+	if (ret != 0)
+		goto out_drop_group;
+
+	iommu_group_put(group);
 
 	spin_lock_irqsave(&state_lock, flags);
 
@@ -811,6 +831,9 @@ int amd_iommu_init_device(struct pci_dev *pdev, int pasids)
 	spin_unlock_irqrestore(&state_lock, flags);
 
 	return 0;
+
+out_drop_group:
+	iommu_group_put(group);
 
 out_free_domain:
 	iommu_domain_free(dev_state->domain);
@@ -851,7 +874,13 @@ void amd_iommu_free_device(struct pci_dev *pdev)
 	/* Get rid of any remaining pasid states */
 	free_pasid_states(dev_state);
 
-	put_device_state_wait(dev_state);
+	put_device_state(dev_state);
+	/*
+	 * Wait until the last reference is dropped before freeing
+	 * the device state.
+	 */
+	wait_event(dev_state->wq, !atomic_read(&dev_state->count));
+	free_device_state(dev_state);
 }
 EXPORT_SYMBOL(amd_iommu_free_device);
 
@@ -921,7 +950,7 @@ static int __init amd_iommu_v2_init(void)
 {
 	int ret;
 
-	pr_info("AMD IOMMUv2 driver by Joerg Roedel <joerg.roedel@amd.com>\n");
+	pr_info("AMD IOMMUv2 driver by Joerg Roedel <jroedel@suse.de>\n");
 
 	if (!amd_iommu_v2_supported()) {
 		pr_info("AMD IOMMUv2 functionality not available on this system\n");

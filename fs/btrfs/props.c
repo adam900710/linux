@@ -41,6 +41,10 @@ static int prop_compression_apply(struct inode *inode,
 				  size_t len);
 static const char *prop_compression_extract(struct inode *inode);
 
+static int prop_dedup_validate(const char *value, size_t len);
+static int prop_dedup_apply(struct inode *inode, const char *value, size_t len);
+static const char *prop_dedup_extract(struct inode *inode);
+
 static struct prop_handler prop_handlers[] = {
 	{
 		.xattr_name = XATTR_BTRFS_PREFIX "compression",
@@ -50,17 +54,22 @@ static struct prop_handler prop_handlers[] = {
 		.inheritable = 1
 	},
 	{
-		.xattr_name = NULL
-	}
+		.xattr_name = XATTR_BTRFS_PREFIX "dedup",
+		.validate = prop_dedup_validate,
+		.apply = prop_dedup_apply,
+		.extract = prop_dedup_extract,
+		.inheritable = 1
+	},
 };
 
 void __init btrfs_props_init(void)
 {
-	struct prop_handler *p;
+	int i;
 
 	hash_init(prop_handlers_ht);
 
-	for (p = &prop_handlers[0]; p->xattr_name; p++) {
+	for (i = 0; i < ARRAY_SIZE(prop_handlers); i++) {
+		struct prop_handler *p = &prop_handlers[i];
 		u64 h = btrfs_name_hash(p->xattr_name, strlen(p->xattr_name));
 
 		hash_add(prop_handlers_ht, &p->node, h);
@@ -301,15 +310,16 @@ static int inherit_props(struct btrfs_trans_handle *trans,
 			 struct inode *inode,
 			 struct inode *parent)
 {
-	const struct prop_handler *h;
 	struct btrfs_root *root = BTRFS_I(inode)->root;
 	int ret;
+	int i;
 
 	if (!test_bit(BTRFS_INODE_HAS_PROPS,
 		      &BTRFS_I(parent)->runtime_flags))
 		return 0;
 
-	for (h = &prop_handlers[0]; h->xattr_name; h++) {
+	for (i = 0; i < ARRAY_SIZE(prop_handlers); i++) {
+		const struct prop_handler *h = &prop_handlers[i];
 		const char *value;
 		u64 num_bytes;
 
@@ -422,6 +432,37 @@ static const char *prop_compression_extract(struct inode *inode)
 	case BTRFS_COMPRESS_LZO:
 		return "lzo";
 	}
+
+	return NULL;
+}
+
+static int prop_dedup_validate(const char *value, size_t len)
+{
+	if (!strncmp("disable", value, len))
+		return 0;
+
+	return -EINVAL;
+}
+
+static int prop_dedup_apply(struct inode *inode, const char *value, size_t len)
+{
+	if (len == 0) {
+		BTRFS_I(inode)->flags &= ~BTRFS_INODE_NODEDUP;
+		return 0;
+	}
+
+	if (!strncmp("disable", value, len)) {
+		BTRFS_I(inode)->flags |= BTRFS_INODE_NODEDUP;
+		return 0;
+	}
+
+	return -EINVAL;
+}
+
+static const char *prop_dedup_extract(struct inode *inode)
+{
+	if (BTRFS_I(inode)->flags | BTRFS_INODE_NODEDUP)
+		return "disable";
 
 	return NULL;
 }

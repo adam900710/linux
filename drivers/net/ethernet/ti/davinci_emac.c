@@ -52,6 +52,7 @@
 #include <linux/dma-mapping.h>
 #include <linux/clk.h>
 #include <linux/platform_device.h>
+#include <linux/regmap.h>
 #include <linux/semaphore.h>
 #include <linux/phy.h>
 #include <linux/bitops.h>
@@ -65,10 +66,12 @@
 #include <linux/of_mdio.h>
 #include <linux/of_irq.h>
 #include <linux/of_net.h>
+#include <linux/mfd/syscon.h>
 
 #include <asm/irq.h>
 #include <asm/page.h>
 
+#include "cpsw.h"
 #include "davinci_cpdma.h"
 
 static int debug_level;
@@ -1838,7 +1841,7 @@ davinci_emac_of_get_pdata(struct platform_device *pdev, struct emac_priv *priv)
 	if (!is_valid_ether_addr(pdata->mac_addr)) {
 		mac_addr = of_get_mac_address(np);
 		if (mac_addr)
-			memcpy(pdata->mac_addr, mac_addr, ETH_ALEN);
+			ether_addr_copy(pdata->mac_addr, mac_addr);
 	}
 
 	of_property_read_u32(np, "ti,davinci-ctrl-reg-offset",
@@ -1858,8 +1861,12 @@ davinci_emac_of_get_pdata(struct platform_device *pdev, struct emac_priv *priv)
 	pdata->no_bd_ram = of_property_read_bool(np, "ti,davinci-no-bd-ram");
 
 	priv->phy_node = of_parse_phandle(np, "phy-handle", 0);
-	if (!priv->phy_node)
-		pdata->phy_id = NULL;
+	if (!priv->phy_node) {
+		if (!of_phy_is_fixed_link(np))
+			pdata->phy_id = NULL;
+		else if (of_phy_register_fixed_link(np) >= 0)
+			priv->phy_node = of_node_get(np);
+	}
 
 	auxdata = pdev->dev.platform_data;
 	if (auxdata) {
@@ -1877,6 +1884,15 @@ davinci_emac_of_get_pdata(struct platform_device *pdev, struct emac_priv *priv)
 	pdev->dev.platform_data = pdata;
 
 	return  pdata;
+}
+
+static int davinci_emac_try_get_mac(struct platform_device *pdev,
+				    int instance, u8 *mac_addr)
+{
+	if (!pdev->dev.of_node)
+		return -EINVAL;
+
+	return ti_cm_get_macid(&pdev->dev, instance, mac_addr);
 }
 
 /**
@@ -1954,8 +1970,10 @@ static int davinci_emac_probe(struct platform_device *pdev)
 	if (res_ctrl) {
 		priv->ctrl_base =
 			devm_ioremap_resource(&pdev->dev, res_ctrl);
-		if (IS_ERR(priv->ctrl_base))
+		if (IS_ERR(priv->ctrl_base)) {
+			rc = PTR_ERR(priv->ctrl_base);
 			goto no_pdata;
+		}
 	} else {
 		priv->ctrl_base = priv->remap_addr + pdata->ctrl_mod_reg_offset;
 	}
@@ -2008,6 +2026,10 @@ static int davinci_emac_probe(struct platform_device *pdev)
 		goto no_cpdma_chan;
 	}
 	ndev->irq = res->start;
+
+	rc = davinci_emac_try_get_mac(pdev, res_ctrl ? 0 : 1, priv->mac_addr);
+	if (!rc)
+		ether_addr_copy(ndev->dev_addr, priv->mac_addr);
 
 	if (!is_valid_ether_addr(priv->mac_addr)) {
 		/* Use random MAC if none passed */

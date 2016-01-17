@@ -18,11 +18,11 @@
 #include <asm/mtrr.h>
 #include <asm/page.h>
 #include <asm/mce.h>
-#include <asm/xcr.h>
 #include <asm/suspend.h>
+#include <asm/fpu/internal.h>
 #include <asm/debugreg.h>
-#include <asm/fpu-internal.h> /* pcntxt_mask */
 #include <asm/cpu.h>
+#include <asm/mmu_context.h>
 
 #ifdef CONFIG_X86_32
 __visible unsigned long saved_context_ebx;
@@ -105,11 +105,8 @@ static void __save_processor_state(struct saved_context *ctxt)
 	ctxt->cr0 = read_cr0();
 	ctxt->cr2 = read_cr2();
 	ctxt->cr3 = read_cr3();
-#ifdef CONFIG_X86_32
-	ctxt->cr4 = read_cr4_safe();
-#else
-/* CONFIG_X86_64 */
-	ctxt->cr4 = read_cr4();
+	ctxt->cr4 = __read_cr4_safe();
+#ifdef CONFIG_X86_64
 	ctxt->cr8 = read_cr8();
 #endif
 	ctxt->misc_enable_saved = !rdmsrl_safe(MSR_IA32_MISC_ENABLE,
@@ -137,7 +134,7 @@ static void do_fpu_end(void)
 static void fix_processor_context(void)
 {
 	int cpu = smp_processor_id();
-	struct tss_struct *t = &per_cpu(init_tss, cpu);
+	struct tss_struct *t = &per_cpu(cpu_tss, cpu);
 #ifdef CONFIG_X86_64
 	struct desc_struct *desc = get_cpu_gdt_table(cpu);
 	tss_desc tss;
@@ -157,7 +154,9 @@ static void fix_processor_context(void)
 	syscall_init();				/* This sets MSR_*STAR and related */
 #endif
 	load_TR_desc();				/* This does ltr */
-	load_LDT(&current->active_mm->context);	/* This does lldt */
+	load_mm_ldt(current->active_mm);	/* This does lldt */
+
+	fpu__resume_cpu();
 }
 
 /**
@@ -175,12 +174,12 @@ static void notrace __restore_processor_state(struct saved_context *ctxt)
 	/* cr4 was introduced in the Pentium CPU */
 #ifdef CONFIG_X86_32
 	if (ctxt->cr4)
-		write_cr4(ctxt->cr4);
+		__write_cr4(ctxt->cr4);
 #else
 /* CONFIG X86_64 */
 	wrmsrl(MSR_EFER, ctxt->efer);
 	write_cr8(ctxt->cr8);
-	write_cr4(ctxt->cr4);
+	__write_cr4(ctxt->cr4);
 #endif
 	write_cr3(ctxt->cr3);
 	write_cr2(ctxt->cr2);
@@ -223,12 +222,6 @@ static void notrace __restore_processor_state(struct saved_context *ctxt)
 	wrmsrl(MSR_GS_BASE, ctxt->gs_base);
 	wrmsrl(MSR_KERNEL_GS_BASE, ctxt->gs_kernel_base);
 #endif
-
-	/*
-	 * restore XCR0 for xsave capable cpu's.
-	 */
-	if (cpu_has_xsave)
-		xsetbv(XCR_XFEATURE_ENABLED_MASK, pcntxt_mask);
 
 	fix_processor_context();
 

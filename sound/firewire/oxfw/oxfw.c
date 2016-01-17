@@ -18,6 +18,9 @@
 #define VENDOR_GRIFFIN		0x001292
 #define VENDOR_BEHRINGER	0x001564
 #define VENDOR_LACIE		0x00d04b
+#define VENDOR_TASCAM		0x00022e
+
+#define MODEL_SATELLITE		0x00200f
 
 #define SPECIFIER_1394TA	0x00a02d
 #define VERSION_AVC		0x010001
@@ -104,10 +107,22 @@ end:
 	return err;
 }
 
+/*
+ * This module releases the FireWire unit data after all ALSA character devices
+ * are released by applications. This is for releasing stream data or finishing
+ * transactions safely. Thus at returning from .remove(), this module still keep
+ * references for the unit.
+ */
 static void oxfw_card_free(struct snd_card *card)
 {
 	struct snd_oxfw *oxfw = card->private_data;
 	unsigned int i;
+
+	snd_oxfw_stream_destroy_simplex(oxfw, &oxfw->rx_stream);
+	if (oxfw->has_output)
+		snd_oxfw_stream_destroy_simplex(oxfw, &oxfw->tx_stream);
+
+	fw_unit_put(oxfw->unit);
 
 	for (i = 0; i < SND_OXFW_STREAM_FORMAT_ENTRIES; i++) {
 		kfree(oxfw->tx_stream_formats[i]);
@@ -115,6 +130,40 @@ static void oxfw_card_free(struct snd_card *card)
 	}
 
 	mutex_destroy(&oxfw->mutex);
+}
+
+static void detect_quirks(struct snd_oxfw *oxfw)
+{
+	struct fw_device *fw_dev = fw_parent_device(oxfw->unit);
+	struct fw_csr_iterator it;
+	int key, val;
+	int vendor, model;
+
+	/* Seek from Root Directory of Config ROM. */
+	vendor = model = 0;
+	fw_csr_iterator_init(&it, fw_dev->config_rom + 5);
+	while (fw_csr_iterator_next(&it, &key, &val)) {
+		if (key == CSR_VENDOR)
+			vendor = val;
+		else if (key == CSR_MODEL)
+			model = val;
+	}
+
+	/*
+	 * Mackie Onyx Satellite with base station has a quirk to report a wrong
+	 * value in 'dbs' field of CIP header against its format information.
+	 */
+	if (vendor == VENDOR_LOUD && model == MODEL_SATELLITE)
+		oxfw->wrong_dbs = true;
+
+	/*
+	 * TASCAM FireOne has physical control and requires a pair of additional
+	 * MIDI ports.
+	 */
+	if (vendor == VENDOR_TASCAM) {
+		oxfw->midi_input_ports++;
+		oxfw->midi_output_ports++;
+	}
 }
 
 static int oxfw_probe(struct fw_unit *unit,
@@ -136,7 +185,7 @@ static int oxfw_probe(struct fw_unit *unit,
 	oxfw = card->private_data;
 	oxfw->card = card;
 	mutex_init(&oxfw->mutex);
-	oxfw->unit = unit;
+	oxfw->unit = fw_unit_get(unit);
 	oxfw->device_info = (const struct device_info *)id->driver_data;
 	spin_lock_init(&oxfw->lock);
 	init_waitqueue_head(&oxfw->hwdep_wait);
@@ -144,6 +193,8 @@ static int oxfw_probe(struct fw_unit *unit,
 	err = snd_oxfw_stream_discover(oxfw);
 	if (err < 0)
 		goto error;
+
+	detect_quirks(oxfw);
 
 	err = name_card(oxfw);
 	if (err < 0)
@@ -212,12 +263,7 @@ static void oxfw_remove(struct fw_unit *unit)
 {
 	struct snd_oxfw *oxfw = dev_get_drvdata(&unit->device);
 
-	snd_card_disconnect(oxfw->card);
-
-	snd_oxfw_stream_destroy_simplex(oxfw, &oxfw->rx_stream);
-	if (oxfw->has_output)
-		snd_oxfw_stream_destroy_simplex(oxfw, &oxfw->tx_stream);
-
+	/* No need to wait for releasing card object in this context. */
 	snd_card_free_when_closed(oxfw->card);
 }
 
@@ -286,6 +332,13 @@ static const struct ieee1394_device_id oxfw_id_table[] = {
 		.vendor_id	= VENDOR_LOUD,
 		.specifier_id	= SPECIFIER_1394TA,
 		.version	= VERSION_AVC,
+	},
+	/* TASCAM, FireOne */
+	{
+		.match_flags	= IEEE1394_MATCH_VENDOR_ID |
+				  IEEE1394_MATCH_MODEL_ID,
+		.vendor_id	= VENDOR_TASCAM,
+		.model_id	= 0x800007,
 	},
 	{ }
 };

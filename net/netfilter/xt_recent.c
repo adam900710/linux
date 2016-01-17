@@ -237,7 +237,7 @@ static void recent_table_flush(struct recent_table *t)
 static bool
 recent_mt(const struct sk_buff *skb, struct xt_action_param *par)
 {
-	struct net *net = dev_net(par->in ? par->in : par->out);
+	struct net *net = par->net;
 	struct recent_net *recent_net = recent_pernet(net);
 	const struct xt_recent_mtinfo_v1 *info = par->matchinfo;
 	struct recent_table *t;
@@ -378,12 +378,11 @@ static int recent_mt_check(const struct xt_mtchk_param *par,
 	mutex_lock(&recent_mutex);
 	t = recent_table_lookup(recent_net, info->name);
 	if (t != NULL) {
-		if (info->hit_count > t->nstamps_max_mask) {
-			pr_info("hitcount (%u) is larger than packets to be remembered (%u) for table %s\n",
-				info->hit_count, t->nstamps_max_mask + 1,
-				info->name);
-			ret = -EINVAL;
-			goto out;
+		if (nstamp_mask > t->nstamps_max_mask) {
+			spin_lock_bh(&recent_lock);
+			recent_table_flush(t);
+			t->nstamps_max_mask = nstamp_mask;
+			spin_unlock_bh(&recent_lock);
 		}
 
 		t->refcnt++;
