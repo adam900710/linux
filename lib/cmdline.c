@@ -139,10 +139,12 @@ char *get_options(const char *str, int nints, int *ints)
 EXPORT_SYMBOL(get_options);
 
 /**
- *	memparse - parse a string with mem suffixes into a number
+ *	memparse - DEPRECATED, parse a string with mem suffixes into a number
  *	@ptr: Where parse begins
  *	@retptr: (output) Optional pointer to next char after parse completes
  *
+ *	There is no way to handle errors, and no overflown detection and string
+ *	sanity checks.
  *	Parses a string into a number.  The number stored at @ptr is
  *	potentially suffixed with K, M, G, T, P, E.
  */
