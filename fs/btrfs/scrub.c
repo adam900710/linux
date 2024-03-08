@@ -1872,6 +1872,8 @@ static int flush_scrub_stripes(struct scrub_ctx *sctx)
 		stripe = &sctx->stripes[i];
 
 		wait_scrub_stripe_io(stripe);
+		sctx->stat.last_physical = stripe->physical +
+					   stripe_length(stripe);
 		scrub_reset_stripe(stripe);
 	}
 out:
@@ -2337,6 +2339,8 @@ static noinline_for_stack int scrub_stripe(struct scrub_ctx *sctx,
 			stripe_logical += chunk_logical;
 			ret = scrub_raid56_parity_stripe(sctx, scrub_dev, bg,
 							 map, stripe_logical);
+			sctx->stat.last_physical = min(physical + BTRFS_STRIPE_LEN,
+						       physical_end);
 			if (ret)
 				goto out;
 			goto next;
