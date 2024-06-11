@@ -98,7 +98,8 @@ enum {
 	/* The btrfs_fs_info created for self-tests */
 	BTRFS_FS_STATE_DUMMY_FS_INFO,
 
-	BTRFS_FS_STATE_NO_CSUMS,
+	BTRFS_FS_STATE_NO_DATA_CSUMS,
+	BTRFS_FS_STATE_SKIP_META_CSUMS,
 
 	/* Indicates there was an error cleaning up a log tree. */
 	BTRFS_FS_STATE_LOG_CLEANUP_ERROR,
@@ -224,6 +225,7 @@ enum {
 	BTRFS_MOUNT_IGNOREDATACSUMS		= (1UL << 28),
 	BTRFS_MOUNT_NODISCARD			= (1UL << 29),
 	BTRFS_MOUNT_NOSPACECACHE		= (1UL << 30),
+	BTRFS_MOUNT_IGNOREMETACSUMS		= (1UL << 31),
 };
 
 /*
