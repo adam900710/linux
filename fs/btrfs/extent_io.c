@@ -101,6 +101,8 @@ struct btrfs_bio_ctrl {
 	blk_opf_t opf;
 	btrfs_bio_end_io_t end_io_func;
 	struct writeback_control *wbc;
+	/* For read/write extent map cache. */
+	struct extent_map *em;
 };
 
 static void submit_one_bio(struct btrfs_bio_ctrl *bio_ctrl)
@@ -1003,8 +1005,8 @@ static struct extent_map *__get_extent_map(struct inode *inode,
  * XXX JDM: This needs looking at to ensure proper page locking
  * return 0 on success, otherwise return error
  */
-static int btrfs_do_readpage(struct folio *folio, struct extent_map **em_cached,
-		      struct btrfs_bio_ctrl *bio_ctrl, u64 *prev_em_start)
+static int btrfs_do_readpage(struct folio *folio, struct btrfs_bio_ctrl *bio_ctrl,
+			     u64 *prev_em_start)
 {
 	struct inode *inode = folio->mapping->host;
 	struct btrfs_fs_info *fs_info = inode_to_fs_info(inode);
@@ -1052,7 +1054,7 @@ static int btrfs_do_readpage(struct folio *folio, struct extent_map **em_cached,
 			break;
 		}
 		em = __get_extent_map(inode, folio, cur, end - cur + 1,
-				      em_cached);
+				      &bio_ctrl->em);
 		if (IS_ERR(em)) {
 			unlock_extent(tree, cur, end, NULL);
 			end_folio_read(folio, false, cur, end + 1 - cur);
@@ -1160,13 +1162,12 @@ int btrfs_read_folio(struct file *file, struct folio *folio)
 	u64 start = folio_pos(folio);
 	u64 end = start + folio_size(folio) - 1;
 	struct btrfs_bio_ctrl bio_ctrl = { .opf = REQ_OP_READ };
-	struct extent_map *em_cached = NULL;
 	int ret;
 
 	btrfs_lock_and_flush_ordered_range(inode, start, end, NULL);
 
-	ret = btrfs_do_readpage(folio, &em_cached, &bio_ctrl, NULL);
-	free_extent_map(em_cached);
+	ret = btrfs_do_readpage(folio, &bio_ctrl, NULL);
+	free_extent_map(bio_ctrl.em);
 
 	/*
 	 * If btrfs_do_readpage() failed we will want to submit the assembled
@@ -2349,16 +2350,14 @@ void btrfs_readahead(struct readahead_control *rac)
 	struct folio *folio;
 	u64 start = readahead_pos(rac);
 	u64 end = start + readahead_length(rac) - 1;
-	struct extent_map *em_cached = NULL;
 	u64 prev_em_start = (u64)-1;
 
 	btrfs_lock_and_flush_ordered_range(inode, start, end, NULL);
 
 	while ((folio = readahead_folio(rac)) != NULL)
-		btrfs_do_readpage(folio, &em_cached, &bio_ctrl, &prev_em_start);
+		btrfs_do_readpage(folio, &bio_ctrl, &prev_em_start);
 
-	if (em_cached)
-		free_extent_map(em_cached);
+	free_extent_map(bio_ctrl.em);
 	submit_one_bio(&bio_ctrl);
 }
 
