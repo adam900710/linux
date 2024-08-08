@@ -1357,7 +1357,8 @@ static int submit_one_sector(struct btrfs_inode *inode,
 	/* @filepos >= i_size case should be handled by the caller. */
 	ASSERT(filepos < i_size);
 
-	em = btrfs_get_extent(inode, NULL, filepos, sectorsize);
+	em = __get_extent_map(&inode->vfs_inode, NULL, filepos, sectorsize,
+			      &bio_ctrl->em);
 	if (IS_ERR(em))
 		return PTR_ERR_OR_ZERO(em);
 
@@ -2320,6 +2321,7 @@ next_page:
 		cur = cur_end + 1;
 	}
 
+	free_extent_map(bio_ctrl.em);
 	submit_write_bio(&bio_ctrl, found_error ? ret : 0);
 }
 
@@ -2338,6 +2340,7 @@ int btrfs_writepages(struct address_space *mapping, struct writeback_control *wb
 	 */
 	btrfs_zoned_data_reloc_lock(BTRFS_I(inode));
 	ret = extent_write_cache_pages(mapping, &bio_ctrl);
+	free_extent_map(bio_ctrl.em);
 	submit_write_bio(&bio_ctrl, ret);
 	btrfs_zoned_data_reloc_unlock(BTRFS_I(inode));
 	return ret;
