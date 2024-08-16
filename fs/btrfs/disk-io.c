@@ -1542,6 +1542,9 @@ static int cleaner_kthread(void *arg)
 		 * space.
 		 */
 		btrfs_reclaim_bgs(fs_info);
+
+		if (IS_ENABLED(CONFIG_BTRFS_DEBUG))
+			btrfs_free_extent_maps(fs_info);
 sleep:
 		clear_and_wake_up_bit(BTRFS_FS_CLEANER_RUNNING, &fs_info->flags);
 		if (kthread_should_park())

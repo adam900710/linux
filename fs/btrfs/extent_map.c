@@ -1248,13 +1248,14 @@ static long btrfs_scan_root(struct btrfs_root *root, struct btrfs_em_shrink_ctx 
 	return nr_dropped;
 }
 
-long btrfs_free_extent_maps(struct btrfs_fs_info *fs_info, long nr_to_scan)
+long btrfs_free_extent_maps(struct btrfs_fs_info *fs_info)
 {
 	struct btrfs_em_shrink_ctx ctx;
 	u64 start_root_id;
 	u64 next_root_id;
 	bool cycled = false;
 	long nr_dropped = 0;
+	long nr_to_scan = READ_ONCE(fs_info->extent_map_shrinker_nr_to_scan);
 
 	ctx.scanned = 0;
 	ctx.nr_to_scan = nr_to_scan;

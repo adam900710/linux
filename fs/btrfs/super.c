@@ -2402,13 +2402,7 @@ static long btrfs_nr_cached_objects(struct super_block *sb, struct shrink_contro
 
 	trace_btrfs_extent_map_shrinker_count(fs_info, nr);
 
-	/*
-	 * Only report the real number for DEBUG builds, as there are reports of
-	 * serious performance degradation caused by too frequent shrinks.
-	 */
-	if (IS_ENABLED(CONFIG_BTRFS_DEBUG))
-		return nr;
-	return 0;
+	return nr;
 }
 
 static long btrfs_free_cached_objects(struct super_block *sb, struct shrink_control *sc)
@@ -2417,15 +2411,13 @@ static long btrfs_free_cached_objects(struct super_block *sb, struct shrink_cont
 	struct btrfs_fs_info *fs_info = btrfs_sb(sb);
 
 	/*
-	 * We may be called from any task trying to allocate memory and we don't
-	 * want to slow it down with scanning and dropping extent maps. It would
-	 * also cause heavy lock contention if many tasks concurrently enter
-	 * here. Therefore only allow kswapd tasks to scan and drop extent maps.
+	 * Only record the latest nr_to_scan value. The real scan will happen
+	 * at cleaner kthread.
+	 * As free_cached_objects() can be triggered very frequently, it's
+	 * not practical to scan the whole fs to reclaim extent maps.
 	 */
-	if (!current_is_kswapd())
-		return 0;
-
-	return btrfs_free_extent_maps(fs_info, nr_to_scan);
+	WRITE_ONCE(fs_info->extent_map_shrinker_nr_to_scan, nr_to_scan);
+	return 0;
 }
 
 static const struct super_operations btrfs_super_ops = {
