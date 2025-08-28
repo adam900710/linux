@@ -2867,13 +2867,15 @@ int btrfs_init_new_device(struct btrfs_fs_info *fs_info, const char *device_path
 
 	ret = btrfs_commit_transaction(trans);
 	clear_bit(BTRFS_DEV_STATE_NEW, &device->dev_state);
+	if (ret < 0) {
+		trans = NULL;
+		goto error_sysfs;
+	}
+
 	if (seeding_dev) {
 		mutex_unlock(&uuid_mutex);
 		up_write(&sb->s_umount);
 		locked = false;
-
-		if (ret) /* transaction commit */
-			return ret;
 
 		ret = btrfs_relocate_sys_chunks(fs_info);
 		if (ret < 0)
