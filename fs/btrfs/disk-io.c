@@ -3999,7 +3999,7 @@ int btrfs_get_num_tolerated_disk_barrier_failures(u64 flags)
 	return min_tolerated;
 }
 
-static bool is_critical_device(struct btrfs_device *dev)
+static bool is_critical_device(struct btrfs_fs_info *fs_info, struct btrfs_device *dev)
 {
 	/*
 	 * New device primary super block writeback is not tolerated.
@@ -4010,6 +4010,8 @@ static bool is_critical_device(struct btrfs_device *dev)
 	 * there is no bgs on that device, it's better to error out now.
 	 */
 	if (test_bit(BTRFS_DEV_STATE_NEW, &dev->dev_state))
+		return true;
+	if (!btrfs_check_rw_degradable(fs_info, dev))
 		return true;
 	return false;
 }
@@ -4093,7 +4095,7 @@ int write_all_supers(struct btrfs_fs_info *fs_info, int max_mirrors)
 		ret = write_dev_supers(dev, sb, max_mirrors);
 		if (ret) {
 			total_errors++;
-			if (is_critical_device(dev)) {
+			if (is_critical_device(fs_info, dev)) {
 				btrfs_crit(fs_info,
 					   "failed to write super blocks for device %llu",
 					   dev->devid);
@@ -4125,7 +4127,7 @@ int write_all_supers(struct btrfs_fs_info *fs_info, int max_mirrors)
 		ret = wait_dev_supers(dev, max_mirrors);
 		if (ret) {
 			total_errors++;
-			if (is_critical_device(dev)) {
+			if (is_critical_device(fs_info, dev)) {
 				btrfs_crit(fs_info,
 					   "failed to wait super blocks for device %llu",
 					   dev->devid);
