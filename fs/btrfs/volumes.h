@@ -100,6 +100,7 @@ enum btrfs_raid_types {
 #define BTRFS_DEV_STATE_REPLACE_TGT	(3)
 #define BTRFS_DEV_STATE_FLUSH_SENT	(4)
 #define BTRFS_DEV_STATE_NO_READA	(5)
+#define BTRFS_DEV_STATE_SB_WRITE_ERROR	(6)
 
 /* Special value encoding failure to write primary super block. */
 #define BTRFS_SUPER_PRIMARY_WRITE_ERROR		(INT_MAX / 2)
@@ -154,12 +155,6 @@ struct btrfs_device {
 	u32 io_width;
 	/* type and info about this device */
 	u64 type;
-
-	/*
-	 * Counter of super block write errors, values larger than
-	 * BTRFS_SUPER_PRIMARY_WRITE_ERROR encode primary super block write failure.
-	 */
-	atomic_t sb_write_errors;
 
 	/* minimal io size for this device */
 	u32 sector_size;

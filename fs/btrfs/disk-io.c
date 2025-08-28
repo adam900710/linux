@@ -3690,10 +3690,7 @@ static void btrfs_end_super_write(struct bio *bio)
 						     BTRFS_DEV_STAT_WRITE_ERRS);
 			/* Ensure failure if the primary sb fails. */
 			if (bio->bi_opf & REQ_FUA)
-				atomic_add(BTRFS_SUPER_PRIMARY_WRITE_ERROR,
-					   &device->sb_write_errors);
-			else
-				atomic_inc(&device->sb_write_errors);
+				set_bit(BTRFS_DEV_STATE_SB_WRITE_ERROR, &device->dev_state);
 		}
 		folio_unlock(fi.folio);
 		folio_put(fi.folio);
@@ -3718,11 +3715,12 @@ static int write_dev_supers(struct btrfs_device *device,
 	struct btrfs_fs_info *fs_info = device->fs_info;
 	struct address_space *mapping = device->bdev->bd_mapping;
 	SHASH_DESC_ON_STACK(shash, fs_info->csum_shash);
+	bool primary_failed = false;
 	int i;
 	int ret;
 	u64 bytenr, bytenr_orig;
 
-	atomic_set(&device->sb_write_errors, 0);
+	clear_bit(BTRFS_DEV_STATE_SB_WRITE_ERROR, &device->dev_state);
 
 	if (max_mirrors == 0)
 		max_mirrors = BTRFS_SUPER_MIRROR_MAX;
@@ -3738,17 +3736,26 @@ static int write_dev_supers(struct btrfs_device *device,
 		bytenr_orig = btrfs_sb_offset(i);
 		ret = btrfs_sb_log_location(device, i, WRITE, &bytenr);
 		if (ret == -ENOENT) {
+			if (i == 0)
+				primary_failed = true;
 			continue;
 		} else if (ret < 0) {
 			btrfs_err(device->fs_info,
 			  "couldn't get super block location for mirror %d error %d",
 			  i, ret);
-			atomic_inc(&device->sb_write_errors);
+			if (i == 0) {
+				set_bit(BTRFS_DEV_STATE_SB_WRITE_ERROR,
+					&device->dev_state);
+				primary_failed = true;
+			}
 			continue;
 		}
 		if (bytenr + BTRFS_SUPER_INFO_SIZE >=
-		    device->commit_total_bytes)
+		    device->commit_total_bytes) {
+			if (i == 0)
+				primary_failed = true;
 			break;
+		}
 
 		btrfs_set_super_bytenr(sb, bytenr_orig);
 
@@ -3763,7 +3770,11 @@ static int write_dev_supers(struct btrfs_device *device,
 			btrfs_err(device->fs_info,
 			  "couldn't get super block page for bytenr %llu error %ld",
 			  bytenr, PTR_ERR(folio));
-			atomic_inc(&device->sb_write_errors);
+			if (i == 0) {
+				set_bit(BTRFS_DEV_STATE_SB_WRITE_ERROR,
+					&device->dev_state);
+				primary_failed = true;
+			}
 			continue;
 		}
 
@@ -3793,10 +3804,11 @@ static int write_dev_supers(struct btrfs_device *device,
 			bio->bi_opf |= REQ_FUA;
 		submit_bio(bio);
 
-		if (btrfs_advance_sb_log(device, i))
-			atomic_inc(&device->sb_write_errors);
+		btrfs_advance_sb_log(device, i);
 	}
-	return atomic_read(&device->sb_write_errors) < i ? 0 : -1;
+	if (primary_failed)
+		return -1;
+	return 0;
 }
 
 /*
@@ -3809,7 +3821,6 @@ static int write_dev_supers(struct btrfs_device *device,
 static int wait_dev_supers(struct btrfs_device *device, int max_mirrors)
 {
 	int i;
-	int errors = 0;
 	bool primary_failed = false;
 	int ret;
 	u64 bytenr;
@@ -3824,14 +3835,16 @@ static int wait_dev_supers(struct btrfs_device *device, int max_mirrors)
 		if (ret == -ENOENT) {
 			break;
 		} else if (ret < 0) {
-			errors++;
 			if (i == 0)
 				primary_failed = true;
 			continue;
 		}
 		if (bytenr + BTRFS_SUPER_INFO_SIZE >=
-		    device->commit_total_bytes)
+		    device->commit_total_bytes) {
+			if (i == 0)
+				primary_failed = true;
 			break;
+		}
 
 		folio = filemap_get_folio(device->bdev->bd_mapping,
 					  bytenr >> PAGE_SHIFT);
@@ -3844,16 +3857,15 @@ static int wait_dev_supers(struct btrfs_device *device, int max_mirrors)
 		folio_put(folio);
 	}
 
-	errors += atomic_read(&device->sb_write_errors);
-	if (errors >= BTRFS_SUPER_PRIMARY_WRITE_ERROR)
-		primary_failed = true;
+	if (!primary_failed)
+		primary_failed = test_bit(BTRFS_DEV_STATE_SB_WRITE_ERROR,
+					  &device->dev_state);
 	if (primary_failed) {
 		btrfs_err(device->fs_info, "error writing primary super block to device %llu",
 			  device->devid);
 		return -1;
 	}
-
-	return errors < i ? 0 : -1;
+	return 0;
 }
 
 /*
