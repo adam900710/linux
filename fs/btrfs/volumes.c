@@ -2766,6 +2766,7 @@ int btrfs_init_new_device(struct btrfs_fs_info *fs_info, const char *device_path
 	}
 
 	set_bit(BTRFS_DEV_STATE_WRITEABLE, &device->dev_state);
+	set_bit(BTRFS_DEV_STATE_NEW, &device->dev_state);
 	device->generation = trans->transid;
 	device->io_width = fs_info->sectorsize;
 	device->io_align = fs_info->sectorsize;
@@ -2865,7 +2866,7 @@ int btrfs_init_new_device(struct btrfs_fs_info *fs_info, const char *device_path
 	}
 
 	ret = btrfs_commit_transaction(trans);
-
+	clear_bit(BTRFS_DEV_STATE_NEW, &device->dev_state);
 	if (seeding_dev) {
 		mutex_unlock(&uuid_mutex);
 		up_write(&sb->s_umount);

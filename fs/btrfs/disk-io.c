@@ -3999,6 +3999,21 @@ int btrfs_get_num_tolerated_disk_barrier_failures(u64 flags)
 	return min_tolerated;
 }
 
+static bool is_critical_device(struct btrfs_device *dev)
+{
+	/*
+	 * New device primary super block writeback is not tolerated.
+	 *
+	 * As if a power loss after the current transaction, the new device
+	 * has no primary super block, and btrfs will refuse to mount.
+	 * Although it's still possible to mount the fs degraded since
+	 * there is no bgs on that device, it's better to error out now.
+	 */
+	if (test_bit(BTRFS_DEV_STATE_NEW, &dev->dev_state))
+		return true;
+	return false;
+}
+
 int write_all_supers(struct btrfs_fs_info *fs_info, int max_mirrors)
 {
 	struct list_head *head;
@@ -4009,6 +4024,7 @@ int write_all_supers(struct btrfs_fs_info *fs_info, int max_mirrors)
 	int do_barriers;
 	int max_errors;
 	int total_errors = 0;
+	bool critical_error = false;
 	u64 flags;
 
 	do_barriers = !btrfs_test_opt(fs_info, NOBARRIER);
@@ -4039,6 +4055,7 @@ int write_all_supers(struct btrfs_fs_info *fs_info, int max_mirrors)
 		}
 	}
 
+	/* Start from newly added device, to detect problems of them early. */
 	list_for_each_entry(dev, head, dev_list) {
 		if (!dev->bdev) {
 			total_errors++;
@@ -4074,10 +4091,18 @@ int write_all_supers(struct btrfs_fs_info *fs_info, int max_mirrors)
 		}
 
 		ret = write_dev_supers(dev, sb, max_mirrors);
-		if (ret)
+		if (ret) {
 			total_errors++;
+			if (is_critical_device(dev)) {
+				btrfs_crit(fs_info,
+					   "failed to write super blocks for device %llu",
+					   dev->devid);
+				critical_error = true;
+				break;
+			}
+		}
 	}
-	if (total_errors > max_errors) {
+	if (total_errors > max_errors || critical_error) {
 		btrfs_err(fs_info, "%d errors while writing supers",
 			  total_errors);
 		mutex_unlock(&fs_info->fs_devices->device_list_mutex);
@@ -4098,11 +4123,19 @@ int write_all_supers(struct btrfs_fs_info *fs_info, int max_mirrors)
 			continue;
 
 		ret = wait_dev_supers(dev, max_mirrors);
-		if (ret)
+		if (ret) {
 			total_errors++;
+			if (is_critical_device(dev)) {
+				btrfs_crit(fs_info,
+					   "failed to wait super blocks for device %llu",
+					   dev->devid);
+				critical_error = true;
+				break;
+			}
+		}
 	}
 	mutex_unlock(&fs_info->fs_devices->device_list_mutex);
-	if (total_errors > max_errors) {
+	if (total_errors > max_errors || critical_error) {
 		btrfs_handle_fs_error(fs_info, -EIO,
 				      "%d errors while writing supers",
 				      total_errors);

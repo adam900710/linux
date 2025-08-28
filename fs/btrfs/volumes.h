@@ -101,6 +101,7 @@ enum btrfs_raid_types {
 #define BTRFS_DEV_STATE_FLUSH_SENT	(4)
 #define BTRFS_DEV_STATE_NO_READA	(5)
 #define BTRFS_DEV_STATE_SB_WRITE_ERROR	(6)
+#define BTRFS_DEV_STATE_NEW		(7)
 
 /* Special value encoding failure to write primary super block. */
 #define BTRFS_SUPER_PRIMARY_WRITE_ERROR		(INT_MAX / 2)
