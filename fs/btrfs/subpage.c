@@ -451,35 +451,6 @@ void btrfs_subpage_clear_writeback(const struct btrfs_fs_info *fs_info,
 	spin_unlock_irqrestore(&bfs->lock, flags);
 }
 
-void btrfs_subpage_set_ordered(const struct btrfs_fs_info *fs_info,
-			       struct folio *folio, u64 start, u32 len)
-{
-	struct btrfs_folio_state *bfs = folio_get_private(folio);
-	unsigned int start_bit = subpage_calc_start_bit(fs_info, folio,
-							ordered, start, len);
-	unsigned long flags;
-
-	spin_lock_irqsave(&bfs->lock, flags);
-	bitmap_set(bfs->bitmaps, start_bit, len >> fs_info->sectorsize_bits);
-	folio_set_ordered(folio);
-	spin_unlock_irqrestore(&bfs->lock, flags);
-}
-
-void btrfs_subpage_clear_ordered(const struct btrfs_fs_info *fs_info,
-				 struct folio *folio, u64 start, u32 len)
-{
-	struct btrfs_folio_state *bfs = folio_get_private(folio);
-	unsigned int start_bit = subpage_calc_start_bit(fs_info, folio,
-							ordered, start, len);
-	unsigned long flags;
-
-	spin_lock_irqsave(&bfs->lock, flags);
-	bitmap_clear(bfs->bitmaps, start_bit, len >> fs_info->sectorsize_bits);
-	if (subpage_test_bitmap_all_zero(fs_info, folio, ordered))
-		folio_clear_ordered(folio);
-	spin_unlock_irqrestore(&bfs->lock, flags);
-}
-
 /*
  * Unlike set/clear which is dependent on each page status, for test all bits
  * are tested in the same way.
@@ -503,7 +474,6 @@ bool btrfs_subpage_test_##name(const struct btrfs_fs_info *fs_info,	\
 IMPLEMENT_BTRFS_SUBPAGE_TEST_OP(uptodate);
 IMPLEMENT_BTRFS_SUBPAGE_TEST_OP(dirty);
 IMPLEMENT_BTRFS_SUBPAGE_TEST_OP(writeback);
-IMPLEMENT_BTRFS_SUBPAGE_TEST_OP(ordered);
 
 /*
  * Note that, in selftests (extent-io-tests), we can have empty fs_info passed
@@ -599,8 +569,6 @@ IMPLEMENT_BTRFS_PAGE_OPS(dirty, folio_mark_dirty, folio_clear_dirty_for_io,
 			 folio_test_dirty);
 IMPLEMENT_BTRFS_PAGE_OPS(writeback, folio_start_writeback, folio_end_writeback,
 			 folio_test_writeback);
-IMPLEMENT_BTRFS_PAGE_OPS(ordered, folio_set_ordered, folio_clear_ordered,
-			 folio_test_ordered);
 
 #define DEFINE_GET_SUBPAGE_BITMAP(name)						\
 static inline unsigned long get_bitmap_value_##name(				\
@@ -633,7 +601,6 @@ static inline unsigned long *get_bitmap_pointer_##name(				\
 DEFINE_GET_SUBPAGE_BITMAP(uptodate);
 DEFINE_GET_SUBPAGE_BITMAP(dirty);
 DEFINE_GET_SUBPAGE_BITMAP(writeback);
-DEFINE_GET_SUBPAGE_BITMAP(ordered);
 DEFINE_GET_SUBPAGE_BITMAP(locked);
 
 #define SUBPAGE_DUMP_BITMAP(fs_info, folio, name, start, len)			\
@@ -761,37 +728,33 @@ void __cold btrfs_subpage_dump_bitmap(const struct btrfs_fs_info *fs_info,
 		unsigned long uptodate;
 		unsigned long dirty;
 		unsigned long writeback;
-		unsigned long ordered;
 		unsigned long locked;
 
 		spin_lock_irqsave(&bfs->lock, flags);
 		uptodate = get_bitmap_value_uptodate(fs_info, folio);
 		dirty = get_bitmap_value_dirty(fs_info, folio);
 		writeback = get_bitmap_value_writeback(fs_info, folio);
-		ordered = get_bitmap_value_ordered(fs_info, folio);
 		locked = get_bitmap_value_locked(fs_info, folio);
 
 		spin_unlock_irqrestore(&bfs->lock, flags);
 
 		btrfs_warn(fs_info,
-"start=%llu len=%u page=%llu, bitmaps uptodate=%*pbl dirty=%*pbl writeback=%*pbl ordered=%*pbl locked=%*pbl",
+"start=%llu len=%u page=%llu, bitmaps uptodate=%*pbl dirty=%*pbl writeback=%*pbl locked=%*pbl",
 			    start, len, folio_pos(folio),
 			    blocks_per_folio, &uptodate,
 			    blocks_per_folio, &dirty,
 			    blocks_per_folio, &writeback,
-			    blocks_per_folio, &ordered,
 			    blocks_per_folio, &locked);
 		return;
 	}
 
 	spin_lock_irqsave(&bfs->lock, flags);
 	btrfs_warn(fs_info,
-"start=%llu len=%u page=%llu, bitmaps uptodate=%*pbl dirty=%*pbl writeback=%*pbl ordered=%*pbl locked=%*pbl",
+"start=%llu len=%u page=%llu, bitmaps uptodate=%*pbl dirty=%*pbl writeback=%*pbl locked=%*pbl",
 		    start, len, folio_pos(folio),
 		    blocks_per_folio, get_bitmap_pointer_uptodate(fs_info, folio),
 		    blocks_per_folio, get_bitmap_pointer_dirty(fs_info, folio),
 		    blocks_per_folio, get_bitmap_pointer_writeback(fs_info, folio),
-		    blocks_per_folio, get_bitmap_pointer_ordered(fs_info, folio),
 		    blocks_per_folio, get_bitmap_pointer_locked(fs_info, folio));
 	spin_unlock_irqrestore(&bfs->lock, flags);
 }

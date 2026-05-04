@@ -14,16 +14,17 @@ struct folio;
 /*
  * Extra info for subpage bitmap.
  *
- * For subpage we pack all uptodate/dirty/writeback/ordered bitmaps into
+ * For subpage we pack all uptodate/dirty/writeback/locked bitmaps into
  * one larger bitmap.
  *
  * This structure records how they are organized in the bitmap:
  *
- * /- uptodate          /- dirty        /- ordered
- * |			|		|
- * v			v		v
- * |u|u|u|u|........|u|u|d|d|.......|d|d|o|o|.......|o|o|
- * |< sectors_per_page >|
+ * /- uptodate  /- dirty   /- writeback  /- locked
+ * |            |          |             |
+ * v            v          v             v
+ * |u|u|....|u|u|d|d|..|d|d|w|w|.....|w|w|l|l|...|l|l|
+ * \            /
+ *  blocks_per_folio
  *
  * Unlike regular macro-like enums, here we do not go upper-case names, as
  * these names will be utilized in various macros to define function names.
@@ -39,11 +40,6 @@ enum {
 	 * timing.
 	 */
 	btrfs_bitmap_nr_writeback,
-
-	/*
-	 * The ordered flags shows if the range has an ordered extent.
-	 */
-	btrfs_bitmap_nr_ordered,
 
 	/*
 	 * The locked bit is for async delalloc range (compression), currently
@@ -179,7 +175,6 @@ bool btrfs_meta_folio_test_##name(struct folio *folio, const struct extent_buffe
 DECLARE_BTRFS_SUBPAGE_OPS(uptodate);
 DECLARE_BTRFS_SUBPAGE_OPS(dirty);
 DECLARE_BTRFS_SUBPAGE_OPS(writeback);
-DECLARE_BTRFS_SUBPAGE_OPS(ordered);
 
 /*
  * Helper for error cleanup, where a folio will have its dirty flag cleared,
