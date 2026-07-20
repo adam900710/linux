@@ -89,7 +89,7 @@ int btrfs_inode_set_file_extent_range(struct btrfs_inode *inode, u64 start,
 	if (len == 0)
 		return 0;
 
-	ASSERT(IS_ALIGNED(start + len, inode->root->fs_info->sectorsize));
+	ASSERT(IS_ALIGNED(start + len, inode->root->fs_info->datasize));
 
 	return btrfs_set_extent_bit(inode->file_extent_tree, start, start + len - 1,
 				    EXTENT_DIRTY, NULL);
@@ -118,7 +118,7 @@ int btrfs_inode_clear_file_extent_range(struct btrfs_inode *inode, u64 start,
 	if (len == 0)
 		return 0;
 
-	ASSERT(IS_ALIGNED(start + len, inode->root->fs_info->sectorsize) ||
+	ASSERT(IS_ALIGNED(start + len, inode->root->fs_info->datasize) ||
 	       len == (u64)-1);
 
 	return btrfs_clear_extent_bit(inode->file_extent_tree, start,
@@ -680,8 +680,8 @@ int btrfs_lookup_csums_bitmap(struct btrfs_root *root, struct btrfs_path *path,
 	bool free_path = false;
 	int ret;
 
-	ASSERT(IS_ALIGNED(start, fs_info->sectorsize) &&
-	       IS_ALIGNED(end + 1, fs_info->sectorsize));
+	ASSERT(IS_ALIGNED(start, fs_info->datasize) &&
+	       IS_ALIGNED(end + 1, fs_info->datasize));
 
 	if (!path) {
 		path = btrfs_alloc_path();
@@ -1388,7 +1388,7 @@ void btrfs_extent_item_to_extent_map(struct btrfs_inode *inode,
 
 		em->disk_bytenr = EXTENT_MAP_INLINE;
 		em->start = 0;
-		em->len = fs_info->sectorsize;
+		em->len = fs_info->datasize;
 		em->offset = 0;
 		btrfs_extent_map_set_compression(em, compress_type);
 	} else {
@@ -1417,7 +1417,7 @@ u64 btrfs_file_extent_end(const struct btrfs_path *path)
 	fi = btrfs_item_ptr(leaf, slot, struct btrfs_file_extent_item);
 
 	if (btrfs_file_extent_type(leaf, fi) == BTRFS_FILE_EXTENT_INLINE)
-		end = leaf->fs_info->sectorsize;
+		end = leaf->fs_info->datasize;
 	else
 		end = key.offset + btrfs_file_extent_num_bytes(leaf, fi);
 
