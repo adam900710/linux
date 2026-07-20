@@ -314,6 +314,14 @@ struct btrfs_ioctl_fs_info_args {
  */
 #define BTRFS_FEATURE_COMPAT_RO_BLOCK_GROUP_TREE	(1ULL << 3)
 
+/*
+ * Introduce a minimial data io size, that must be larger than
+ * and power-of-2 times of sectorsize.
+ *
+ * Meanwhile data checksum is still calculated based on sectorsize.
+ */
+#define BTRFS_FEATURE_COMPAT_RO_DATA_SIZE		(1ULL << 4)
+
 #define BTRFS_FEATURE_INCOMPAT_MIXED_BACKREF	(1ULL << 0)
 #define BTRFS_FEATURE_INCOMPAT_DEFAULT_SUBVOL	(1ULL << 1)
 #define BTRFS_FEATURE_INCOMPAT_MIXED_GROUPS	(1ULL << 2)
