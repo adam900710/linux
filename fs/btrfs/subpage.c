@@ -749,6 +749,31 @@ void btrfs_folio_set_lock(const struct btrfs_fs_info *fs_info,
 	spin_unlock_irqrestore(&bfs->lock, flags);
 }
 
+bool btrfs_folio_check_fully_prepared(const struct btrfs_fs_info *fs_info,
+				      struct folio *folio)
+{
+	struct btrfs_folio_state *bfs;
+	unsigned long flags;
+	bool ret;
+
+	ASSERT(folio_test_locked(folio));
+
+	if (likely(!folio_test_unprepared(folio)))
+		return true;
+	if (!btrfs_is_subpage(fs_info, folio)) {
+		unsigned long private = (unsigned long)folio_get_private(folio);
+
+		ASSERT(private & EXTENT_FOLIO_PRIVATE);
+
+		return (private & EXTENT_FOLIO_DIRTY);
+	}
+	bfs = folio_get_private(folio);
+	spin_lock_irqsave(&bfs->lock, flags);
+	ret = subpage_test_bitmap_all_set(fs_info, folio, dirty);
+	spin_unlock_irqrestore(&bfs->lock, flags);
+	return ret;
+}
+
 /*
  * Clear the dirty flag for the folio.
  *

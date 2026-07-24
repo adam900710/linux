@@ -178,6 +178,8 @@ static inline void btrfs_folio_clamp_finish_io(struct btrfs_fs_info *fs_info,
 	btrfs_folio_clamp_clear_writeback(fs_info, locked_folio, start, len);
 }
 
+bool btrfs_folio_check_fully_prepared(const struct btrfs_fs_info *fs_info,
+				      struct folio *folio);
 bool btrfs_subpage_clear_and_test_dirty(const struct btrfs_fs_info *fs_info,
 					struct folio *folio, u64 start, u32 len);
 
