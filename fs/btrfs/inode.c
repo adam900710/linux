@@ -7491,6 +7491,13 @@ static int btrfs_migrate_folio(struct address_space *mapping,
 #define btrfs_migrate_folio NULL
 #endif
 
+static bool btrfs_dirty_folio_unprepared(struct address_space *mapping,
+					 struct folio *folio)
+{
+	folio_set_unprepared(folio);
+	return filemap_dirty_folio(mapping, folio);
+}
+
 static void btrfs_invalidate_folio(struct folio *folio, size_t offset,
 				 size_t length)
 {
@@ -10604,7 +10611,7 @@ static const struct address_space_operations btrfs_aops = {
 	.launder_folio	= btrfs_launder_folio,
 	.release_folio	= btrfs_release_folio,
 	.migrate_folio	= btrfs_migrate_folio,
-	.dirty_folio	= filemap_dirty_folio,
+	.dirty_folio	= btrfs_dirty_folio_unprepared,
 	.error_remove_folio = generic_error_remove_folio,
 	.swap_activate	= btrfs_swap_activate,
 	.swap_deactivate = btrfs_swap_deactivate,

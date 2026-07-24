@@ -1227,6 +1227,25 @@ static inline void btrfs_force_shutdown(struct btrfs_fs_info *fs_info)
 	}
 }
 
+/*
+ * The folio owner 2 flag is to indicate if the folio is marked dirty but without
+ * proper preparation (e.g. set EXTENT_DELALLOC, reserve space).
+ */
+static inline bool folio_test_unprepared(const struct folio *folio)
+{
+	return folio_test_owner_2(folio);
+}
+
+static inline void folio_set_unprepared(struct folio *folio)
+{
+	return folio_set_owner_2(folio);
+}
+
+static inline void folio_clear_unprepared(struct folio *folio)
+{
+	return folio_clear_owner_2(folio);
+}
+
 #ifdef CONFIG_BTRFS_FS_RUN_SANITY_TESTS
 
 #define EXPORT_FOR_TESTS
