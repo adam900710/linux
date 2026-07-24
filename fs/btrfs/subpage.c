@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
 #include <linux/slab.h>
+#include <linux/writeback.h>
 #include "messages.h"
 #include "subpage.h"
 #include "btrfs_inode.h"
@@ -345,6 +346,19 @@ void btrfs_subpage_clear_uptodate(const struct btrfs_fs_info *fs_info,
 	spin_unlock_irqrestore(&bfs->lock, flags);
 }
 
+/* The internal version without calling ->dirty_folio() callback. */
+static bool folio_mark_dirty_prepared(struct folio *folio)
+{
+	struct address_space *mapping = folio_mapping(folio);
+
+	if (likely(mapping)) {
+		if (folio_test_reclaim(folio))
+			folio_clear_reclaim(folio);
+		return filemap_dirty_folio(mapping, folio);
+	}
+	return noop_dirty_folio(mapping, folio);
+}
+
 void btrfs_subpage_set_dirty(const struct btrfs_fs_info *fs_info,
 			     struct folio *folio, u64 start, u32 len)
 {
@@ -356,7 +370,7 @@ void btrfs_subpage_set_dirty(const struct btrfs_fs_info *fs_info,
 	spin_lock_irqsave(&bfs->lock, flags);
 	bitmap_set(bfs->bitmaps, start_bit, len >> fs_info->sectorsize_bits);
 	spin_unlock_irqrestore(&bfs->lock, flags);
-	folio_mark_dirty(folio);
+	folio_mark_dirty_prepared(folio);
 }
 
 static void folio_clear_tags(struct folio *folio)
@@ -458,6 +472,47 @@ void btrfs_subpage_clear_writeback(const struct btrfs_fs_info *fs_info,
 }
 
 /*
+ * For bs == folio size case, where we have no subpage bitmap to
+ * indicate if a block is properly dirted or unprepared.
+ *
+ * So use one extra bit in folio->private to indicate if the folio
+ * is properly prepared dirty.
+ */
+static void folio_mark_dirty_nonsubpage(struct folio *folio)
+{
+	unsigned long private;
+
+	ASSERT(folio_test_locked(folio));
+	ASSERT(folio_test_private(folio));
+	private = (unsigned long)folio_get_private(folio);
+
+	ASSERT(private & EXTENT_FOLIO_PRIVATE);
+	private |= EXTENT_FOLIO_DIRTY;
+	folio_change_private(folio, (void *)private);
+
+	/*
+	 * We can not call folio_mark_dirty() as it will always mark
+	 * the folio as unprepared.
+	 * So here we call the internal version instead.
+	 */
+	folio_mark_dirty_prepared(folio);
+}
+
+static void folio_clear_dirty_nonsubpage(struct folio *folio)
+{
+	unsigned long private;
+
+	ASSERT(folio_test_locked(folio));
+	ASSERT(folio_test_private(folio));
+	private = (unsigned long)folio_get_private(folio);
+
+	ASSERT(private & EXTENT_FOLIO_PRIVATE);
+	private &= ~EXTENT_FOLIO_DIRTY;
+	folio_change_private(folio, (void *)private);
+	folio_clear_dirty_for_io(folio);
+}
+
+/*
  * Unlike set/clear which is dependent on each page status, for test all bits
  * are tested in the same way.
  */
@@ -486,14 +541,17 @@ IMPLEMENT_BTRFS_SUBPAGE_TEST_OP(writeback);
  * in.  We only test sectorsize == PAGE_SIZE cases so far, thus we can fall
  * back to regular sectorsize branch.
  */
-#define IMPLEMENT_BTRFS_PAGE_OPS(name, folio_set_func,			\
-				 folio_clear_func, folio_test_func)	\
+#define IMPLEMENT_BTRFS_PAGE_OPS(name, data_folio_set_func,		\
+				 data_folio_clear_func,			\
+				 meta_folio_set_func,			\
+				 meta_folio_clear_func,			\
+				 folio_test_func)			\
 void btrfs_folio_set_##name(const struct btrfs_fs_info *fs_info,	\
 			    struct folio *folio, u64 start, u32 len)	\
 {									\
 	if (unlikely(!fs_info) ||					\
 	    !btrfs_is_subpage(fs_info, folio)) {			\
-		folio_set_func(folio);					\
+		data_folio_set_func(folio);				\
 		return;							\
 	}								\
 	btrfs_subpage_set_##name(fs_info, folio, start, len);		\
@@ -503,7 +561,7 @@ void btrfs_folio_clear_##name(const struct btrfs_fs_info *fs_info,	\
 {									\
 	if (unlikely(!fs_info) ||					\
 	    !btrfs_is_subpage(fs_info, folio)) {			\
-		folio_clear_func(folio);				\
+		data_folio_clear_func(folio);				\
 		return;							\
 	}								\
 	btrfs_subpage_clear_##name(fs_info, folio, start, len);		\
@@ -521,7 +579,7 @@ void btrfs_folio_clamp_set_##name(const struct btrfs_fs_info *fs_info,	\
 {									\
 	if (unlikely(!fs_info) ||					\
 	    !btrfs_is_subpage(fs_info, folio)) {			\
-		folio_set_func(folio);					\
+		data_folio_set_func(folio);				\
 		return;							\
 	}								\
 	btrfs_subpage_clamp_range(folio, &start, &len);			\
@@ -532,7 +590,7 @@ void btrfs_folio_clamp_clear_##name(const struct btrfs_fs_info *fs_info, \
 {									\
 	if (unlikely(!fs_info) ||					\
 	    !btrfs_is_subpage(fs_info, folio)) {			\
-		folio_clear_func(folio);				\
+		data_folio_clear_func(folio);				\
 		return;							\
 	}								\
 	btrfs_subpage_clamp_range(folio, &start, &len);			\
@@ -550,7 +608,7 @@ bool btrfs_folio_clamp_test_##name(const struct btrfs_fs_info *fs_info,	\
 void btrfs_meta_folio_set_##name(struct folio *folio, const struct extent_buffer *eb) \
 {									\
 	if (!btrfs_meta_is_subpage(eb->fs_info)) {			\
-		folio_set_func(folio);					\
+		meta_folio_set_func(folio);				\
 		return;							\
 	}								\
 	btrfs_subpage_set_##name(eb->fs_info, folio, eb->start, eb->len); \
@@ -558,7 +616,7 @@ void btrfs_meta_folio_set_##name(struct folio *folio, const struct extent_buffer
 void btrfs_meta_folio_clear_##name(struct folio *folio, const struct extent_buffer *eb) \
 {									\
 	if (!btrfs_meta_is_subpage(eb->fs_info)) {			\
-		folio_clear_func(folio);				\
+		meta_folio_clear_func(folio);				\
 		return;							\
 	}								\
 	btrfs_subpage_clear_##name(eb->fs_info, folio, eb->start, eb->len); \
@@ -569,11 +627,16 @@ bool btrfs_meta_folio_test_##name(struct folio *folio, const struct extent_buffe
 		return folio_test_func(folio);				\
 	return btrfs_subpage_test_##name(eb->fs_info, folio, eb->start, eb->len); \
 }
+
 IMPLEMENT_BTRFS_PAGE_OPS(uptodate, folio_mark_uptodate, folio_clear_uptodate,
+			 folio_mark_uptodate, folio_clear_uptodate,
 			 folio_test_uptodate);
-IMPLEMENT_BTRFS_PAGE_OPS(dirty, folio_mark_dirty, folio_clear_dirty_for_io,
+IMPLEMENT_BTRFS_PAGE_OPS(dirty, folio_mark_dirty_nonsubpage,
+			 folio_clear_dirty_nonsubpage,
+			 folio_mark_dirty, folio_clear_dirty_for_io,
 			 folio_test_dirty);
 IMPLEMENT_BTRFS_PAGE_OPS(writeback, folio_start_writeback, folio_end_writeback,
+			 folio_start_writeback, folio_end_writeback,
 			 folio_test_writeback);
 
 #define DEFINE_GET_SUBPAGE_BITMAP(name)						\

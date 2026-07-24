@@ -61,7 +61,8 @@ enum {
  * Folio private values.  Every page that is controlled by the extent map has
  * folio private set to this value.
  */
-#define EXTENT_FOLIO_PRIVATE			1
+#define EXTENT_FOLIO_PRIVATE			(1ULL << 0)
+#define EXTENT_FOLIO_DIRTY			(1ULL << 1)
 
 /*
  * The extent buffer bitmap operations are done with byte granularity instead of
