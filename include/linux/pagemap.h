@@ -419,8 +419,10 @@ static inline void mapping_set_folio_order_range(struct address_space *mapping,
 						 unsigned int min,
 						 unsigned int max)
 {
-	if (!IS_ENABLED(CONFIG_TRANSPARENT_HUGEPAGE))
+	if (!IS_ENABLED(CONFIG_TRANSPARENT_HUGEPAGE)) {
+		WARN_ON_ONCE(min);
 		return;
+	}
 
 	if (min > MAX_PAGECACHE_ORDER)
 		min = MAX_PAGECACHE_ORDER;
