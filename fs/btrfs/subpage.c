@@ -246,7 +246,7 @@ void btrfs_folio_end_lock(const struct btrfs_fs_info *fs_info,
 
 	ASSERT(folio_test_locked(folio));
 
-	if (unlikely(!fs_info) || !btrfs_is_subpage(fs_info, folio)) {
+	if (!btrfs_is_subpage(fs_info, folio)) {
 		folio_unlock(folio);
 		return;
 	}
@@ -698,8 +698,7 @@ IMPLEMENT_BTRFS_SUBPAGE_TEST_OP(fixup);
 void btrfs_folio_set_##name(const struct btrfs_fs_info *fs_info,	\
 			    struct folio *folio, u64 start, u32 len)	\
 {									\
-	if (unlikely(!fs_info) ||					\
-	    !btrfs_is_subpage(fs_info, folio)) {			\
+	if (!btrfs_is_subpage(fs_info, folio)) {			\
 		folio_set_func(folio);					\
 		return;							\
 	}								\
@@ -708,8 +707,7 @@ void btrfs_folio_set_##name(const struct btrfs_fs_info *fs_info,	\
 void btrfs_folio_clear_##name(const struct btrfs_fs_info *fs_info,	\
 			      struct folio *folio, u64 start, u32 len)	\
 {									\
-	if (unlikely(!fs_info) ||					\
-	    !btrfs_is_subpage(fs_info, folio)) {			\
+	if (!btrfs_is_subpage(fs_info, folio)) {			\
 		folio_clear_func(folio);				\
 		return;							\
 	}								\
@@ -718,16 +716,14 @@ void btrfs_folio_clear_##name(const struct btrfs_fs_info *fs_info,	\
 bool btrfs_folio_test_##name(const struct btrfs_fs_info *fs_info,	\
 			     struct folio *folio, u64 start, u32 len)	\
 {									\
-	if (unlikely(!fs_info) ||					\
-	    !btrfs_is_subpage(fs_info, folio))				\
+	if (!btrfs_is_subpage(fs_info, folio))				\
 		return folio_test_func(folio);				\
 	return btrfs_subpage_test_##name(fs_info, folio, start, len);	\
 }									\
 void btrfs_folio_clamp_set_##name(const struct btrfs_fs_info *fs_info,	\
 				  struct folio *folio, u64 start, u32 len) \
 {									\
-	if (unlikely(!fs_info) ||					\
-	    !btrfs_is_subpage(fs_info, folio)) {			\
+	if (!btrfs_is_subpage(fs_info, folio)) {			\
 		folio_set_func(folio);					\
 		return;							\
 	}								\
@@ -737,8 +733,7 @@ void btrfs_folio_clamp_set_##name(const struct btrfs_fs_info *fs_info,	\
 void btrfs_folio_clamp_clear_##name(const struct btrfs_fs_info *fs_info, \
 				    struct folio *folio, u64 start, u32 len) \
 {									\
-	if (unlikely(!fs_info) ||					\
-	    !btrfs_is_subpage(fs_info, folio)) {			\
+	if (!btrfs_is_subpage(fs_info, folio)) {			\
 		folio_clear_func(folio);				\
 		return;							\
 	}								\
@@ -748,8 +743,7 @@ void btrfs_folio_clamp_clear_##name(const struct btrfs_fs_info *fs_info, \
 bool btrfs_folio_clamp_test_##name(const struct btrfs_fs_info *fs_info,	\
 				   struct folio *folio, u64 start, u32 len) \
 {									\
-	if (unlikely(!fs_info) ||					\
-	    !btrfs_is_subpage(fs_info, folio))				\
+	if (!btrfs_is_subpage(fs_info, folio))				\
 		return folio_test_func(folio);				\
 	btrfs_subpage_clamp_range(folio, &start, &len);			\
 	return btrfs_subpage_test_##name(fs_info, folio, start, len);	\
@@ -882,7 +876,7 @@ void btrfs_folio_set_lock(const struct btrfs_fs_info *fs_info,
 	int ret;
 
 	ASSERT(folio_test_locked(folio));
-	if (unlikely(!fs_info) || !btrfs_is_subpage(fs_info, folio))
+	if (!btrfs_is_subpage(fs_info, folio))
 		return;
 
 	bfs = folio_get_private(folio);
