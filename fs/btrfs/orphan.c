@@ -25,23 +25,24 @@ int btrfs_insert_orphan_item(struct btrfs_trans_handle *trans,
 int btrfs_del_orphan_item(struct btrfs_trans_handle *trans,
 			  struct btrfs_root *root, u64 offset)
 {
-	BTRFS_PATH_AUTO_FREE(path);
+	struct btrfs_path path = { 0 };
 	struct btrfs_key key;
-	int ret = 0;
+	int ret;
 
 	key.objectid = BTRFS_ORPHAN_OBJECTID;
 	key.type = BTRFS_ORPHAN_ITEM_KEY;
 	key.offset = offset;
 
-	path = btrfs_alloc_path();
-	if (!path)
-		return -ENOMEM;
-
-	ret = btrfs_search_slot(trans, root, &key, path, -1, 1);
+	ret = btrfs_search_slot(trans, root, &key, &path, -1, 1);
 	if (ret < 0)
-		return ret;
-	if (ret)
-		return -ENOENT;
+		goto out;
+	if (ret) {
+		ret = -ENOENT;
+		goto out;
+	}
 
-	return btrfs_del_item(trans, root, path);
+	ret = btrfs_del_item(trans, root, &path);
+out:
+	btrfs_release_path(&path);
+	return ret;
 }
