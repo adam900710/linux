@@ -633,7 +633,6 @@ static int btrfs_dev_replace_start(struct btrfs_fs_info *fs_info,
 		goto leave;
 
 	down_write(&dev_replace->rwsem);
-	dev_replace->replace_task = current;
 	switch (dev_replace->replace_state) {
 	case BTRFS_IOCTL_DEV_REPLACE_STATE_NEVER_STARTED:
 	case BTRFS_IOCTL_DEV_REPLACE_STATE_FINISHED:
@@ -647,6 +646,7 @@ static int btrfs_dev_replace_start(struct btrfs_fs_info *fs_info,
 		goto leave;
 	}
 
+	dev_replace->replace_task = current;
 	dev_replace->cont_reading_from_srcdev_mode = read_src;
 	dev_replace->srcdev = src_device;
 	dev_replace->tgtdev = tgt_device;
@@ -693,6 +693,7 @@ static int btrfs_dev_replace_start(struct btrfs_fs_info *fs_info,
 			BTRFS_IOCTL_DEV_REPLACE_STATE_NEVER_STARTED;
 		dev_replace->srcdev = NULL;
 		dev_replace->tgtdev = NULL;
+		dev_replace->replace_task = NULL;
 		up_write(&dev_replace->rwsem);
 		goto leave;
 	}
@@ -874,18 +875,20 @@ static int btrfs_dev_replace_finishing(struct btrfs_fs_info *fs_info,
 	/* don't allow cancel or unmount to disturb the finishing procedure */
 	mutex_lock(&dev_replace->lock_finishing_cancel_unmount);
 
-	down_read(&dev_replace->rwsem);
+	down_write(&dev_replace->rwsem);
+	dev_replace->replace_task = NULL;
+
 	/* was the operation canceled, or is it finished? */
 	if (dev_replace->replace_state !=
 	    BTRFS_IOCTL_DEV_REPLACE_STATE_STARTED) {
-		up_read(&dev_replace->rwsem);
+		up_write(&dev_replace->rwsem);
 		mutex_unlock(&dev_replace->lock_finishing_cancel_unmount);
 		return 0;
 	}
 
 	tgt_device = dev_replace->tgtdev;
 	src_device = dev_replace->srcdev;
-	up_read(&dev_replace->rwsem);
+	up_write(&dev_replace->rwsem);
 
 	/*
 	 * flush all outstanding I/O and inode extent mappings before the
@@ -986,8 +989,6 @@ error:
 
 	list_add(&tgt_device->dev_alloc_list, &fs_devices->alloc_list);
 	fs_devices->rw_devices++;
-
-	dev_replace->replace_task = NULL;
 	up_write(&dev_replace->rwsem);
 	btrfs_rm_dev_replace_blocked(fs_info);
 
