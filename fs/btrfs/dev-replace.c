@@ -946,7 +946,12 @@ static int btrfs_dev_replace_finishing(struct btrfs_fs_info *fs_info,
 								src_device,
 								tgt_device);
 	} else {
-		if (scrub_ret != -ECANCELED)
+		if (scrub_ret == -ECANCELED)
+			btrfs_info(fs_info,
+				"dev_replace from %s (devid %llu) to %s canceled",
+				btrfs_dev_name(src_device), src_device->devid,
+				btrfs_dev_name(tgt_device));
+		else
 			btrfs_err(fs_info,
 				 "dev_replace from %s (devid %llu) to %s failed %d",
 				 btrfs_dev_name(src_device),
@@ -1112,19 +1117,10 @@ int btrfs_dev_replace_cancel(struct btrfs_fs_info *fs_info)
 		src_device = dev_replace->srcdev;
 		up_write(&dev_replace->rwsem);
 		ret = btrfs_scrub_cancel(fs_info);
-		if (ret < 0) {
+		if (ret < 0)
 			result = BTRFS_IOCTL_DEV_REPLACE_RESULT_NOT_STARTED;
-		} else {
+		else
 			result = BTRFS_IOCTL_DEV_REPLACE_RESULT_NO_ERROR;
-			/*
-			 * btrfs_dev_replace_finishing() will handle the
-			 * cleanup part
-			 */
-			btrfs_info(fs_info,
-				"dev_replace from %s (devid %llu) to %s canceled",
-				btrfs_dev_name(src_device), src_device->devid,
-				btrfs_dev_name(tgt_device));
-		}
 		break;
 	case BTRFS_IOCTL_DEV_REPLACE_STATE_SUSPENDED:
 		/*
