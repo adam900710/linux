@@ -948,7 +948,7 @@ static int btrfs_dev_replace_finishing(struct btrfs_fs_info *fs_info,
 	} else {
 		if (scrub_ret != -ECANCELED)
 			btrfs_err(fs_info,
-				 "btrfs_scrub_dev(%s, %llu, %s) failed %d",
+				 "dev_replace from %s (devid %llu) to %s failed %d",
 				 btrfs_dev_name(src_device),
 				 src_device->devid,
 				 btrfs_dev_name(tgt_device), scrub_ret);
