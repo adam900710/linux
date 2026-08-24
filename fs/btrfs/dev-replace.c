@@ -893,8 +893,9 @@ static int btrfs_dev_replace_finishing(struct btrfs_fs_info *fs_info,
 	 */
 	ret = btrfs_start_delalloc_roots(fs_info, LONG_MAX, false);
 	if (ret) {
-		mutex_unlock(&dev_replace->lock_finishing_cancel_unmount);
-		return ret;
+		mutex_lock(&fs_devices->device_list_mutex);
+		mutex_lock(&fs_info->chunk_mutex);
+		goto out;
 	}
 	btrfs_wait_ordered_roots(fs_info, U64_MAX, NULL);
 
@@ -906,8 +907,10 @@ static int btrfs_dev_replace_finishing(struct btrfs_fs_info *fs_info,
 	while (1) {
 		trans = btrfs_start_transaction(root, 0);
 		if (IS_ERR(trans)) {
-			mutex_unlock(&dev_replace->lock_finishing_cancel_unmount);
-			return PTR_ERR(trans);
+			ret = PTR_ERR(trans);
+			mutex_lock(&fs_devices->device_list_mutex);
+			mutex_lock(&fs_info->chunk_mutex);
+			goto out;
 		}
 		ret = btrfs_commit_transaction(trans);
 		WARN_ON(ret);
@@ -925,10 +928,11 @@ static int btrfs_dev_replace_finishing(struct btrfs_fs_info *fs_info,
 		}
 	}
 
+out:
 	down_write(&dev_replace->rwsem);
 	dev_replace->replace_state =
-		scrub_ret ? BTRFS_IOCTL_DEV_REPLACE_STATE_CANCELED
-			  : BTRFS_IOCTL_DEV_REPLACE_STATE_FINISHED;
+		(scrub_ret || ret) ? BTRFS_IOCTL_DEV_REPLACE_STATE_CANCELED
+				   : BTRFS_IOCTL_DEV_REPLACE_STATE_FINISHED;
 	dev_replace->tgtdev = NULL;
 	dev_replace->srcdev = NULL;
 	dev_replace->time_stopped = ktime_get_real_seconds();
@@ -938,14 +942,14 @@ static int btrfs_dev_replace_finishing(struct btrfs_fs_info *fs_info,
 	 * Update allocation state in the new device and replace the old device
 	 * with the new one in the mapping tree.
 	 */
-	if (!scrub_ret) {
-		scrub_ret = btrfs_set_target_alloc_state(src_device, tgt_device);
-		if (scrub_ret)
-			goto error;
-		btrfs_dev_replace_update_device_in_mapping_tree(fs_info,
-								src_device,
-								tgt_device);
-	} else {
+	if (!scrub_ret && !ret) {
+		ret = btrfs_set_target_alloc_state(src_device, tgt_device);
+		if (!ret)
+			btrfs_dev_replace_update_device_in_mapping_tree(fs_info,
+									src_device,
+									tgt_device);
+	}
+	if (scrub_ret || ret) {
 		if (scrub_ret == -ECANCELED)
 			btrfs_info(fs_info,
 				"dev_replace from %s (devid %llu) to %s canceled",
@@ -956,8 +960,7 @@ static int btrfs_dev_replace_finishing(struct btrfs_fs_info *fs_info,
 				 "dev_replace from %s (devid %llu) to %s failed %d",
 				 btrfs_dev_name(src_device),
 				 src_device->devid,
-				 btrfs_dev_name(tgt_device), scrub_ret);
-error:
+				 btrfs_dev_name(tgt_device), scrub_ret ? scrub_ret : ret);
 		up_write(&dev_replace->rwsem);
 		mutex_unlock(&fs_info->chunk_mutex);
 		mutex_unlock(&fs_devices->device_list_mutex);
@@ -967,7 +970,7 @@ error:
 		btrfs_rm_dev_replace_unblocked(fs_info);
 		mutex_unlock(&dev_replace->lock_finishing_cancel_unmount);
 
-		return scrub_ret;
+		return scrub_ret ? scrub_ret : ret;
 	}
 
 	btrfs_info(fs_info,
