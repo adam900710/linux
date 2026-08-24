@@ -633,7 +633,6 @@ static int btrfs_dev_replace_start(struct btrfs_fs_info *fs_info,
 		goto leave;
 
 	down_write(&dev_replace->rwsem);
-	dev_replace->replace_task = current;
 	switch (dev_replace->replace_state) {
 	case BTRFS_IOCTL_DEV_REPLACE_STATE_NEVER_STARTED:
 	case BTRFS_IOCTL_DEV_REPLACE_STATE_FINISHED:
@@ -650,6 +649,7 @@ static int btrfs_dev_replace_start(struct btrfs_fs_info *fs_info,
 	dev_replace->cont_reading_from_srcdev_mode = read_src;
 	dev_replace->srcdev = src_device;
 	dev_replace->tgtdev = tgt_device;
+	dev_replace->replace_task = current;
 
 	btrfs_info(fs_info,
 		      "dev_replace from %s (devid %llu) to %s started",
@@ -693,6 +693,7 @@ static int btrfs_dev_replace_start(struct btrfs_fs_info *fs_info,
 			BTRFS_IOCTL_DEV_REPLACE_STATE_NEVER_STARTED;
 		dev_replace->srcdev = NULL;
 		dev_replace->tgtdev = NULL;
+		dev_replace->replace_task = NULL;
 		up_write(&dev_replace->rwsem);
 		goto leave;
 	}
@@ -875,9 +876,19 @@ static int btrfs_dev_replace_finishing(struct btrfs_fs_info *fs_info,
 	mutex_lock(&dev_replace->lock_finishing_cancel_unmount);
 
 	down_read(&dev_replace->rwsem);
-	/* was the operation canceled, or is it finished? */
 	if (dev_replace->replace_state !=
 	    BTRFS_IOCTL_DEV_REPLACE_STATE_STARTED) {
+		/*
+		 * Only suspended replace can reach here. Regular cancelling
+		 * will not touch replace_state.
+		 *
+		 * Suspended replace won't reset tgt/src dev as it may be resumed
+		 * later.
+		 * And we do not need write rwsem lock to change replace_task.
+		 * The only reader in btrfs_map_block() doesn't acquire rwsem
+		 * to access replace_task either.
+		 */
+		dev_replace->replace_task = NULL;
 		up_read(&dev_replace->rwsem);
 		mutex_unlock(&dev_replace->lock_finishing_cancel_unmount);
 		return 0;
@@ -935,6 +946,7 @@ out:
 				   : BTRFS_IOCTL_DEV_REPLACE_STATE_FINISHED;
 	dev_replace->tgtdev = NULL;
 	dev_replace->srcdev = NULL;
+	dev_replace->replace_task = NULL;
 	dev_replace->time_stopped = ktime_get_real_seconds();
 	dev_replace->item_needs_writeback = 1;
 
@@ -994,8 +1006,6 @@ out:
 
 	list_add(&tgt_device->dev_alloc_list, &fs_devices->alloc_list);
 	fs_devices->rw_devices++;
-
-	dev_replace->replace_task = NULL;
 	up_write(&dev_replace->rwsem);
 	btrfs_rm_dev_replace_blocked(fs_info);
 
