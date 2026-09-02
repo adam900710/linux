@@ -169,11 +169,15 @@ static void btrfs_subpage_assert(const struct btrfs_fs_info *fs_info,
 	/* Basic checks */
 	ASSERT(folio_test_private(folio) && folio_get_private(folio));
 	ASSERT(IS_ALIGNED(start, fs_info->sectorsize) &&
-	       IS_ALIGNED(len, fs_info->sectorsize), "start=%llu len=%u", start, len);
+	       IS_ALIGNED(len, fs_info->sectorsize),
+	       "start=%llu len=%u folio=%llu/%lu", start, len,
+	       folio_pos(folio), folio_size(folio));
 
 	if (is_data_folio(folio)) {
 		ASSERT(IS_ALIGNED(start, fs_info->datasize) &&
-		       IS_ALIGNED(len, fs_info->datasize), "start=%llu len=%u", start, len);
+		       IS_ALIGNED(len, fs_info->datasize),
+		       "start=%llu len=%u folio=%llu/%lu",
+		       start, len, folio_pos(folio), folio_size(folio));
 		ASSERT(folio_pos(folio) <= start &&
 		       start + len <= folio_next_pos(folio),
 		       "start=%llu len=%u folio_pos=%llu folio_size=%zu",

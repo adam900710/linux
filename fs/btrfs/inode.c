@@ -1213,6 +1213,12 @@ static int cow_one_range(struct btrfs_inode *inode, struct folio *locked_folio,
 	u64 cur_end;
 	int ret;
 
+	ASSERT(IS_ALIGNED(file_offset, fs_info->datasize) &&
+	       IS_ALIGNED(num_bytes, fs_info->datasize) &&
+	       IS_ALIGNED(min_alloc_size, fs_info->datasize),
+	       "root=%lld ino=%llu blocksize=%u start=%llu len=%u",
+	       btrfs_root_id(root), btrfs_ino(inode), fs_info->datasize,
+	       file_offset, num_bytes);
 	ret = btrfs_reserve_extent(root, num_bytes, num_bytes, min_alloc_size,
 				   0, alloc_hint, ins, true, true);
 	if (ret < 0) {
@@ -1230,6 +1236,11 @@ static int cow_one_range(struct btrfs_inode *inode, struct folio *locked_folio,
 	file_extent.offset = 0;
 	file_extent.compression = BTRFS_COMPRESS_NONE;
 
+	ASSERT(IS_ALIGNED(file_offset, fs_info->datasize) &&
+	       IS_ALIGNED(cur_end + 1, fs_info->datasize),
+	       "root=%lld ino=%llu blocksize=%u start=%llu cur_end=%llu len=%u min_alloc=%u",
+	       btrfs_root_id(root), btrfs_ino(inode), fs_info->datasize,
+	       file_offset, cur_end, cur_len, min_alloc_size);
 	/*
 	 * Locked range will be released either during error clean up (inside
 	 * this function or by the caller for previously successful ranges) or
@@ -1371,6 +1382,10 @@ static noinline int cow_file_range(struct btrfs_inode *inode,
 		goto out_unlock;
 	}
 
+	ASSERT(IS_ALIGNED(start, blocksize) && IS_ALIGNED(end + 1, blocksize),
+	       "root=%lld ino=%llu blocksize=%u start=%llu end=%llu len=%llu",
+	       btrfs_root_id(root), btrfs_ino(inode), blocksize,
+	       start, end, end + 1 - start);
 	num_bytes = ALIGN(end - start + 1, blocksize);
 	num_bytes = max(blocksize,  num_bytes);
 	ASSERT(num_bytes <= btrfs_super_total_bytes(fs_info->super_copy));
@@ -2005,6 +2020,11 @@ static noinline int run_delalloc_nocow(struct btrfs_inode *inode,
 	u64 untouched_start;
 	u64 untouched_len = 0;
 
+	ASSERT(IS_ALIGNED(start, fs_info->datasize) &&
+	       IS_ALIGNED(end + 1, fs_info->datasize),
+	       "root=%lld ino=%llu blocksize=%u start=%llu end=%llu len=%llu",
+	       btrfs_root_id(root), btrfs_ino(inode), fs_info->datasize,
+	       start, end, end + 1 - start);
 	/*
 	 * Normally on a zoned device we're only doing COW writes, but in case
 	 * of relocation on a zoned filesystem serializes I/O so that we're only
